@@ -215,7 +215,7 @@ impl<'gc> Builder<'gc> {
             function
                 .args
                 .iter()
-                .map(|arg| (intern(arg), true))
+                .map(|arg| (arg.clone(), true))
                 .collect(),
         );
 
@@ -239,7 +239,7 @@ impl<'gc> Builder<'gc> {
         );
 
         Ok(Function {
-            name: intern(&function.name),
+            name: function.name.clone(),
             arity: function.args.len(),
             frame,
             body: builder.instructions,
@@ -259,7 +259,7 @@ impl<'gc> Builder<'gc> {
                     expr,
                 } => {
                     self.build_expression(expr)?;
-                    self.add_var(name, *mutable);
+                    self.add_var(name.clone(), *mutable);
                     let index = self.resolve_variable(name).unwrap();
                     self.instructions
                         .push(Instruction::Store(index.0 as u16, index.1 as u16));
@@ -313,7 +313,7 @@ impl<'gc> Builder<'gc> {
                         self.stack_size += 1;
                         self.build_expression(field)?;
                         self.instructions.push(Instruction::Dup);
-                        let index = self.add_var("", false);
+                        let index = self.add_var(intern(""), false);
                         self.instructions.push(Instruction::Store(index.0, index.1));
                         self.instructions.push(Instruction::CallNative(&NF_INDEX));
                         self.stack_size -= 1;
@@ -487,7 +487,7 @@ impl<'gc> Builder<'gc> {
                     match append {
                         model::DictAppend::Field(name, expr) => {
                             self.instructions
-                                .push(Instruction::Push(Box::new(Value::String(intern(name)))));
+                                .push(Instruction::Push(Box::new(Value::String(name.clone()))));
                             self.stack_size += 1;
                             self.build_expression(expr)?;
                             self.instructions.push(Instruction::MakeTuple(2));
@@ -510,7 +510,7 @@ impl<'gc> Builder<'gc> {
                     match append {
                         model::DictAppend::Field(name, expr) => {
                             self.instructions
-                                .push(Instruction::Push(Box::new(Value::String(intern(name)))));
+                                .push(Instruction::Push(Box::new(Value::String(name.clone()))));
                             self.stack_size += 1;
                             self.build_expression(expr)?;
                             self.instructions.push(Instruction::MakeTuple(2));
@@ -735,6 +735,11 @@ impl<'gc> Builder<'gc> {
                     .push(Instruction::MakeClosure(Gc::new(self.mc, function)));
                 self.stack_size += 1;
             }
+            model::Expression::StaticNativeFn { native_fn } => {
+                self.instructions
+                    .push(Instruction::Push(Box::new(Value::NativeFn(native_fn))));
+                self.stack_size += 1;
+            }
         }
         Ok(())
     }
@@ -781,10 +786,10 @@ impl<'gc> Builder<'gc> {
         })
     }
 
-    fn add_var(&mut self, name: &str, mutable: bool) -> (u16, u16) {
+    fn add_var(&mut self, name: Str, mutable: bool) -> (u16, u16) {
         let index = self.envs.len() - 1;
         let index2 = self.envs.last().unwrap().len();
-        self.envs.last_mut().unwrap().push((intern(name), mutable));
+        self.envs.last_mut().unwrap().push((name, mutable));
         (index as u16, index2 as u16)
     }
 
@@ -805,7 +810,7 @@ fn build_value<'gc>(value: &model::Literal) -> Value<'gc> {
         model::Literal::Null => Value::Null,
         model::Literal::Int(value) => Value::Int(*value),
         model::Literal::Float(value) => Value::Float(*value),
-        model::Literal::String(value) => Value::String(intern(value)),
+        model::Literal::String(value) => Value::String(value.clone()),
         model::Literal::Bool(value) => Value::Bool(*value),
     }
 }

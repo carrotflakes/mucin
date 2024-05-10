@@ -245,4 +245,16 @@ fn test() {
         );
     })
     .unwrap();
+    rt.pop_env();
+
+    // Runtime::call_fn test
+    rt.push_env_from_src(r#"fn main(a, b) [a, b]"#).unwrap();
+    rt.call_fn(
+        "main",
+        |_| vec![Value::Int(0), Value::Int(1)],
+        |_, v| {
+            assert_eq!(format!("{:?}", v), "[0, 1]");
+        },
+    )
+    .unwrap();
 }

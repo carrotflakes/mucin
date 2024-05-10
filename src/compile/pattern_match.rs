@@ -1,5 +1,6 @@
 use crate::{
     model::*,
+    native_fns::{NF_STRUCT_TYPE, NF_TYPEOF},
     string::{intern, unique_str},
 };
 
@@ -57,8 +58,8 @@ impl Pattern {
                             name: type_var_name.clone(),
                             mutable: false,
                             expr: Expression::Call {
-                                callee: Box::new(Expression::Variable {
-                                    name: intern("typeof"),
+                                callee: Box::new(Expression::StaticNativeFn {
+                                    native_fn: &NF_TYPEOF,
                                 }),
                                 args: vec![VecAppend::Element(target_var.clone())],
                             },
@@ -138,8 +139,8 @@ impl Pattern {
                         name: intern("__eq"),
                         args: vec![
                             Expression::Call {
-                                callee: Box::new(Expression::Variable {
-                                    name: intern("typeof"),
+                                callee: Box::new(Expression::StaticNativeFn {
+                                    native_fn: &NF_TYPEOF,
                                 }),
                                 args: vec![VecAppend::Element(target_var.clone())],
                             },
@@ -175,8 +176,8 @@ impl Pattern {
                         name: intern("__eq"),
                         args: vec![
                             Expression::Call {
-                                callee: Box::new(Expression::Variable {
-                                    name: intern("typeof"),
+                                callee: Box::new(Expression::StaticNativeFn {
+                                    native_fn: &NF_TYPEOF,
                                 }),
                                 args: vec![VecAppend::Element(target_var.clone())],
                             },
@@ -215,8 +216,8 @@ impl Pattern {
                         name: intern("__eq"),
                         args: vec![
                             Expression::Call {
-                                callee: Box::new(Expression::Variable {
-                                    name: intern("structType"),
+                                callee: Box::new(Expression::StaticNativeFn {
+                                    native_fn: &NF_STRUCT_TYPE,
                                 }),
                                 args: vec![VecAppend::Element(target_var.clone())],
                             },

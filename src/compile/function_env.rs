@@ -1,7 +1,4 @@
-use crate::{
-    model,
-    string::{intern, Str},
-};
+use crate::{model, string::Str};
 
 pub(super) struct FunctionEnv {
     outer_variables: Vec<Str>,
@@ -161,9 +158,6 @@ impl FunctionEnv {
                 self.inner_variables.truncate(len);
             }
             model::Expression::Match { expr, arms } => {
-                // XXX
-                self.add_variable(intern("typeof"));
-
                 self.expression(expr);
                 let len = self.inner_variables.len();
                 for (pat, expr) in arms {
@@ -189,6 +183,7 @@ impl FunctionEnv {
                 self.expression(&function.body);
                 self.inner_variables.truncate(len);
             }
+            model::Expression::StaticNativeFn { native_fn: _ } => {}
         }
     }
 

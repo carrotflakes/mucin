@@ -11,7 +11,7 @@ pub type Env<'gc> = Gc<'gc, RefLock<Struct<'gc>>>;
 #[derive(Clone)]
 pub struct Vm<'gc> {
     mc: &'gc Mutation<'gc>,
-    pcs: Vec<(Gc<'gc, Function<'gc>>, usize, Vec<Env<'gc>>)>,
+    frames: Vec<(Gc<'gc, Function<'gc>>, usize, Vec<Env<'gc>>)>,
     values: Vec<Value<'gc>>,
 }
 
@@ -19,7 +19,7 @@ impl<'gc> Vm<'gc> {
     pub fn new(mc: &'gc Mutation<'gc>) -> Self {
         Self {
             mc,
-            pcs: vec![],
+            frames: vec![],
             values: vec![],
         }
     }
@@ -66,14 +66,15 @@ impl<'gc> Vm<'gc> {
     pub fn run_closure_with_args(
         &mut self,
         closure: Closure<'gc>,
-        args: Vec<Value<'gc>>,
+        mut args: Vec<Value<'gc>>,
     ) -> Result<Value<'gc>, String> {
         assert_eq!(closure.function.arity, args.len());
 
+        let env = Struct::from_type(self.mc, closure.function.frame);
+        env.borrow_mut(self.mc).values[..args.len()].swap_with_slice(&mut args);
         let mut envs = closure.capture.to_vec();
-        envs.push(Struct::from_type(self.mc, closure.function.frame));
+        envs.push(env);
 
-        self.values.extend(args);
         self.run_function(closure.function, envs)
     }
 
@@ -82,13 +83,13 @@ impl<'gc> Vm<'gc> {
         function: Gc<'gc, Function<'gc>>,
         envs: Vec<Env<'gc>>,
     ) -> Result<Value<'gc>, String> {
-        self.pcs.push((function, 0, envs));
+        self.frames.push((function, 0, envs));
         match self.run_loop() {
             Ok(v) => Ok(v),
             Err(err) => Err([err]
                 .into_iter()
                 .chain(
-                    self.pcs
+                    self.frames
                         .iter()
                         .map(|(f, pc, _)| format!("{:?} [{}]", &f.name, pc)),
                 )
@@ -98,7 +99,7 @@ impl<'gc> Vm<'gc> {
     }
 
     fn run_loop(&mut self) -> Result<Value<'gc>, String> {
-        while let Some((function, pc, envs)) = self.pcs.last_mut() {
+        while let Some((function, pc, envs)) = self.frames.last_mut() {
             #[cfg(debug_assertions)]
             if *pc >= function.body.len() {
                 println!("function: {:?}", function);
@@ -144,7 +145,7 @@ impl<'gc> Vm<'gc> {
                     self.call(f, vec)?;
                 }
                 Instruction::Return => {
-                    self.pcs.pop();
+                    self.frames.pop();
                 }
                 Instruction::Rewind(rewind, keep_top) => {
                     let len = self.values.len();
@@ -214,18 +215,18 @@ impl<'gc> Vm<'gc> {
                     self.values.push(left.ge(&right)?);
                 }
                 Instruction::Jump(pc) => {
-                    self.pcs.last_mut().unwrap().1 = *pc;
+                    self.frames.last_mut().unwrap().1 = *pc;
                 }
                 Instruction::JumpIf(pc) => {
                     let condition = self.values.pop().unwrap();
                     if condition.is_truthy() {
-                        self.pcs.last_mut().unwrap().1 = *pc;
+                        self.frames.last_mut().unwrap().1 = *pc;
                     }
                 }
                 Instruction::JumpIfNot(pc) => {
                     let condition = self.values.pop().unwrap();
                     if !condition.is_truthy() {
-                        self.pcs.last_mut().unwrap().1 = *pc;
+                        self.frames.last_mut().unwrap().1 = *pc;
                     }
                 }
 
@@ -346,7 +347,7 @@ impl<'gc> Vm<'gc> {
                         values: env,
                     }),
                 ));
-                self.pcs.push((closure.function.clone(), 0, envs));
+                self.frames.push((closure.function.clone(), 0, envs));
             }
             callee => return Err(format!("expected function, got {:?}", callee)),
         }
@@ -378,7 +379,7 @@ impl<'gc> Vm<'gc> {
                         values: env,
                     }),
                 ));
-                self.pcs.push((closure.function.clone(), 0, envs));
+                self.frames.push((closure.function.clone(), 0, envs));
             }
             callee => return Err(format!("expected function, got {:?}", callee)),
         }

@@ -14,11 +14,10 @@ type Error = String;
 pub enum Value<'gc> {
     Unit,
     Null,
+    Bool(bool),
     Int(i64),
     Float(f64),
-
     String(Str),
-    Bool(bool),
 
     Tuple(Box<[Value<'gc>]>),
     Vec(Gc<'gc, RefLock<Vec<Value<'gc>>>>),
@@ -255,10 +254,10 @@ impl<'gc> PartialEq for Value<'gc> {
         match (self, other) {
             (Value::Unit, Value::Unit) => true,
             (Value::Null, Value::Null) => true,
+            (Value::Bool(left), Value::Bool(right)) => left == right,
             (Value::Int(left), Value::Int(right)) => left == right,
             (Value::Float(left), Value::Float(right)) => left == right,
             (Value::String(left), Value::String(right)) => left == right,
-            (Value::Bool(left), Value::Bool(right)) => left == right,
 
             (Value::Vec(left), Value::Vec(right)) => Gc::ptr_eq(*left, *right),
             (Value::Dict(left), Value::Dict(right)) => Gc::ptr_eq(*left, *right),
@@ -281,10 +280,10 @@ impl<'gc> std::fmt::Debug for Value<'gc> {
         match self {
             Value::Unit => write!(f, "()"),
             Value::Null => write!(f, "null"),
+            Value::Bool(value) => write!(f, "{}", value),
             Value::Int(value) => write!(f, "{}", value),
             Value::Float(value) => write!(f, "{}", value),
             Value::String(value) => write!(f, "{:?}", value),
-            Value::Bool(value) => write!(f, "{}", value),
             Value::Tuple(value) => write!(f, "{:?}", value),
             Value::Vec(vec) => write!(f, "{:?}", vec.borrow()),
             Value::Dict(dict) => write!(f, "{:?}", dict.borrow()),
@@ -302,10 +301,10 @@ impl<'gc> std::fmt::Display for Value<'gc> {
         match self {
             Value::Unit => write!(f, "()"),
             Value::Null => write!(f, "null"),
+            Value::Bool(value) => write!(f, "{}", value),
             Value::Int(value) => write!(f, "{}", value),
             Value::Float(value) => write!(f, "{}", value),
             Value::String(value) => write!(f, "{}", value),
-            Value::Bool(value) => write!(f, "{}", value),
             Value::Tuple(values) => {
                 let f: &mut std::fmt::Formatter<'_> = f;
                 write!(f, "(")?;
@@ -328,28 +327,10 @@ impl<'gc> std::fmt::Display for Value<'gc> {
                 write!(f, "]")
             }
             Value::Dict(dict) => write!(f, "{}", dict.borrow()),
-            Value::StructType(struct_type) => {
-                write!(f, "{}", struct_type.name)?;
-                write!(f, "{{")?;
-                for (i, field) in struct_type.fields.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", field.0)?;
-                }
-                write!(f, "}}")
-            }
+            Value::StructType(struct_type) => write!(f, "{}", struct_type),
             Value::Struct(struct_) => {
-                let struct_ = struct_.borrow();
-                write!(f, "{}", struct_.struct_type.name)?;
-                write!(f, "{{")?;
-                for (i, value) in struct_.values.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}: {}", &struct_.struct_type.fields[i].0, value)?;
-                }
-                write!(f, "}}")
+                let struct_ = struct_.as_ref().borrow();
+                write!(f, "{}", struct_)
             }
             Value::Any(_) => write!(f, "<any>"),
             Value::Closure(c) => {
@@ -446,5 +427,33 @@ impl<'gc> Struct<'gc> {
         {
             self.values[i] = value;
         }
+    }
+}
+
+impl std::fmt::Display for StructType<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)?;
+        write!(f, "{{")?;
+        for (i, field) in self.fields.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{}", field.0)?;
+        }
+        write!(f, "}}")
+    }
+}
+
+impl std::fmt::Display for Struct<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.struct_type.name)?;
+        write!(f, "{{")?;
+        for (i, value) in self.values.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{}: {}", &self.struct_type.fields[i].0, value)?;
+        }
+        write!(f, "}}")
     }
 }
