@@ -212,6 +212,11 @@ impl<'gc> RuntimeInner<'gc> {
 const SRC: &str = r#"
 struct Vec {}
 
+fn Vec push(self, value): vecPush(self, value)
+fn Vec pop(self): vecPop(self)
+fn Vec insert(self, index, value): vecInsert(self, index, value)
+fn Vec remove(self, index): vecRemove(self, index)
+
 fn callMethod(args, obj, key) {
     var st = structType(obj);
     if !st && typeof(obj) == "vec" {

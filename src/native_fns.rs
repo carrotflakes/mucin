@@ -104,21 +104,6 @@ pub fn std<'gc>() -> Vec<(Str, Value<'gc>)> {
             },
         ),
         (
-            "vecPush",
-            &NativeFn {
-                arity: 2,
-                function: |mc: &Mutation<'_>, args: &[Value<'_>]| -> Result<Value<'_>, String> {
-                    let vec = match &args[0] {
-                        Value::Vec(vec) => vec,
-                        _ => return Err("expected vec".to_string()),
-                    };
-                    let value = args[1].clone();
-                    vec.borrow_mut(mc).push(value);
-                    Ok(Value::Unit)
-                },
-            },
-        ),
-        (
             "vecLen",
             &NativeFn {
                 arity: 1,
@@ -130,6 +115,10 @@ pub fn std<'gc>() -> Vec<(Str, Value<'gc>)> {
                 },
             },
         ),
+        ("vecPush", &NF_VEC_PUSH),
+        ("vecPop", &NF_VEC_POP),
+        ("vecInsert", &NF_VEC_INSERT),
+        ("vecRemove", &NF_VEC_REMOVE),
         // (
         //     "import",
         //     1,
@@ -218,7 +207,7 @@ fn nf_struct_type_methods<'gc>(
     }
 }
 
-fn nf_index<'gc>(_: &Mutation, values: &[Value<'gc>]) -> std::result::Result<Value<'gc>, String> {
+fn nf_index<'gc>(_: &Mutation, values: &[Value<'gc>]) -> Result<Value<'gc>, String> {
     Ok(match &values[0] {
         Value::Tuple(t) => match &values[1] {
             Value::Int(i) => t[*i as usize].clone(),
@@ -260,10 +249,7 @@ fn nf_index<'gc>(_: &Mutation, values: &[Value<'gc>]) -> std::result::Result<Val
     })
 }
 
-fn nf_field_assign<'gc>(
-    mc: &Mutation<'gc>,
-    values: &[Value<'gc>],
-) -> std::result::Result<Value<'gc>, String> {
+fn nf_field_assign<'gc>(mc: &Mutation<'gc>, values: &[Value<'gc>]) -> Result<Value<'gc>, String> {
     match &values[0] {
         Value::Dict(dict) => {
             let key = match &values[1] {
@@ -312,27 +298,6 @@ fn nf_field_assign<'gc>(
     }
 }
 
-// struct, key => value or closure
-// fn nf_method_call<'gc>(
-//     mc: &Mutation<'gc>,
-//     values: &[Value<'gc>],
-// ) -> std::result::Result<Value<'gc>, String> {
-//     match &values[0] {
-//         Value::Struct(s) => {
-//             let key = match &values[1] {
-//                 Value::String(s) => s,
-//                 _ => return Err("expected string".to_owned()),
-//             };
-//             let s = s.borrow();
-//             let method = s.get_by_str(key.as_str()).ok_or("method not found")?;
-//             let closure = method.as_closure().ok_or("not a function")?;
-//             let args = &values[2..];
-//             let res = crate::runtime::Vm::run_closure(mc, closure, args)?;
-//             Ok(res)
-//         }
-
-// }
-
 pub static NF_TYPEOF: NativeFn = NativeFn {
     arity: 1,
     function: nf_typeof,
@@ -356,4 +321,74 @@ pub static NF_INDEX: NativeFn = NativeFn {
 pub static NF_FIELD_ASSIGN: NativeFn = NativeFn {
     arity: 3,
     function: nf_field_assign,
+};
+
+fn nf_vec_push<'gc>(mc: &Mutation<'gc>, values: &[Value<'gc>]) -> Result<Value<'gc>, String> {
+    match &values[0] {
+        Value::Vec(vec) => {
+            let value = values[1].clone();
+            vec.borrow_mut(mc).push(value);
+            Ok(Value::Unit)
+        }
+        _ => Err("expected vec".to_owned()),
+    }
+}
+
+fn nf_vec_pop<'gc>(mc: &Mutation<'gc>, values: &[Value<'gc>]) -> Result<Value<'gc>, String> {
+    match &values[0] {
+        Value::Vec(vec) => {
+            let value = vec.borrow_mut(mc).pop();
+            Ok(value.unwrap_or(Value::Null))
+        }
+        _ => Err("expected vec".to_owned()),
+    }
+}
+
+fn nf_vec_insert<'gc>(mc: &Mutation<'gc>, values: &[Value<'gc>]) -> Result<Value<'gc>, String> {
+    match &values[0] {
+        Value::Vec(vec) => {
+            let index = match &values[1] {
+                Value::Int(index) => *index as usize,
+                _ => return Err("expected int".to_owned()),
+            };
+            let value = values[2].clone();
+            vec.borrow_mut(mc).insert(index, value);
+            Ok(Value::Unit)
+        }
+        _ => Err("expected vec".to_owned()),
+    }
+}
+
+fn nf_vec_remove<'gc>(mc: &Mutation<'gc>, values: &[Value<'gc>]) -> Result<Value<'gc>, String> {
+    match &values[0] {
+        Value::Vec(vec) => {
+            let index = match &values[1] {
+                Value::Int(index) => *index as usize,
+                _ => return Err("expected int".to_owned()),
+            };
+            let value = vec.borrow_mut(mc).remove(index);
+            Ok(value)
+        }
+        _ => Err("expected vec".to_owned()),
+    }
+}
+
+pub static NF_VEC_PUSH: NativeFn = NativeFn {
+    arity: 2,
+    function: nf_vec_push,
+};
+
+pub static NF_VEC_POP: NativeFn = NativeFn {
+    arity: 1,
+    function: nf_vec_pop,
+};
+
+pub static NF_VEC_INSERT: NativeFn = NativeFn {
+    arity: 3,
+    function: nf_vec_insert,
+};
+
+pub static NF_VEC_REMOVE: NativeFn = NativeFn {
+    arity: 2,
+    function: nf_vec_remove,
 };

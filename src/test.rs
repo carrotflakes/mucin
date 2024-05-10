@@ -259,6 +259,16 @@ fn main() {
     [a, b]
 }
 "#,
+r#"
+fn main() {
+    let a = [1, 2, 3];
+    a.push(4);
+    a.pop();
+    a.insert(2, 5);
+    a.remove(0);
+    a
+}
+"#
     ];
     for (i, src) in srcs.iter().enumerate() {
         println!("test {}", i);

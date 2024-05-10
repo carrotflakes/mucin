@@ -325,14 +325,14 @@ impl<'gc> Vm<'gc> {
     fn call_value(&mut self, arity: usize) -> Result<(), String> {
         match self.values.pop().unwrap() {
             Value::NativeFn(nf) => {
-                arity_check(arity, nf.arity)?;
+                arity_check(std::any::type_name_of_val(&nf.function), arity, nf.arity)?;
                 let len = self.values.len() - nf.arity;
                 let value = (nf.function)(self.mc, &self.values[len..])?;
                 self.values.truncate(len);
                 self.values.push(value);
             }
             Value::Closure(closure) => {
-                arity_check(arity, closure.function.arity)?;
+                arity_check(&closure.function.name, arity, closure.function.arity)?;
                 let mut env =
                     vec![Value::Unit; closure.function.frame.fields.len()].into_boxed_slice();
                 for i in 0..arity {
@@ -358,12 +358,16 @@ impl<'gc> Vm<'gc> {
     fn call(&mut self, f: Value<'gc>, mut args: Vec<Value<'gc>>) -> Result<(), String> {
         match f {
             Value::NativeFn(nf) => {
-                arity_check(args.len(), nf.arity)?;
+                arity_check(
+                    std::any::type_name_of_val(&nf.function),
+                    args.len(),
+                    nf.arity,
+                )?;
                 let value = (nf.function)(self.mc, &args)?;
                 self.values.push(value);
             }
             Value::Closure(closure) => {
-                arity_check(args.len(), closure.function.arity)?;
+                arity_check(&closure.function.name, args.len(), closure.function.arity)?;
                 let mut env =
                     vec![Value::Unit; closure.function.frame.fields.len()].into_boxed_slice();
                 let len = args.len();
@@ -388,9 +392,12 @@ impl<'gc> Vm<'gc> {
     }
 }
 
-fn arity_check(expect: usize, got: usize) -> Result<(), String> {
+fn arity_check(name: &str, expect: usize, got: usize) -> Result<(), String> {
     if expect != got {
-        return Err(format!("expected {} arguments, got {}", expect, got));
+        return Err(format!(
+            "function {:?} expected {} arguments, got {}",
+            name, expect, got
+        ));
     }
     Ok(())
 }
