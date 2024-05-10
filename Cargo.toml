@@ -1,0 +1,13 @@
+[package]
+name = "mucin"
+version = "0.1.0"
+authors = ["carrotflakes <carrotflakes@gmail.com>"]
+edition = "2021"
+
+[dependencies]
+nom = "7.1"
+gc-arena = "0.5"
+
+[dev-dependencies]
+gilder = "0.1"
+clap = { version = "4.5", features = ["derive"] }
