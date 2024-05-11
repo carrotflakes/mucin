@@ -31,20 +31,48 @@ thread_local! {
     static MACROS: std::cell::RefCell<Vec<Arc<Macro>>> = std::cell::RefCell::new(Vec::new());
 }
 
-pub fn parse(i: &str) -> Result<Vec<Definition>, String> {
+pub fn parse(src: &str) -> Result<Vec<Definition>, String> {
     MACROS.with(|macros| {
         let mut macros = macros.borrow_mut();
         macros.clear();
         macros.extend(macros::builtin().into_iter().map(Arc::new));
     });
 
-    let tokens = lex(i).map_err(|err| format!("{:?}", err))?.1;
+    let tokens = lex(src).map_err(|err| format!("{:?}", err))?.1;
 
     match program(&tokens) {
         Ok(([], defs)) => Ok(defs),
-        Ok((i, _)) => Err(format!("parse failed at: {:?}", i)),
-        Err(err) => Err(format!("{:?}", err)),
+        Ok((i, _)) => Err(print_error(src, &tokens, i.first().unwrap())),
+        Err(err) => Err(match err {
+            nom::Err::Incomplete(_) => format!("unexpected EOS"),
+            nom::Err::Error(err) | nom::Err::Failure(err) => {
+                if let Some(token) = err.input.first() {
+                    print_error(src, &tokens, token)
+                } else {
+                    format!("unexpected EOS")
+                }
+            }
+        }),
     }
+}
+
+fn print_error(source: &str, tokens: &[Token<&str>], token: &Token<&str>) -> String {
+    let mut ti = tokens.iter().position(|t| t == token).unwrap();
+    let mut pos = 0;
+    while ti > 0 {
+        match tokens[ti] {
+            Token::Keyword(s) | Token::Identifier(s) | Token::Operator(s) => {
+                pos = s.as_ptr() as usize - source.as_ptr() as usize;
+                break;
+            }
+            Token::Paren(_) | Token::String(_) | Token::Int(_) | Token::Float(_) => {}
+        };
+        ti -= 1;
+    }
+    format!(
+        "unexpected: {:?}",
+        &source[pos..source.len().min(pos + 100)]
+    )
 }
 
 fn program<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Vec<Definition>> {
