@@ -268,6 +268,12 @@ fn main() {
     a.remove(0);
     a
 }
+"#,
+r#"
+// Non-strict arity check
+fn main() {
+    [[1, 2, 3].map(|x| x + 1), [1, 2, 3].map(|x, i, y| i)]
+}
 "#
     ];
     for (i, src) in srcs.iter().enumerate() {

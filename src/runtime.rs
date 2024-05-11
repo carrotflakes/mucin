@@ -216,6 +216,15 @@ fn Vec push(self, value): vecPush(self, value)
 fn Vec pop(self): vecPop(self)
 fn Vec insert(self, index, value): vecInsert(self, index, value)
 fn Vec remove(self, index): vecRemove(self, index)
+fn Vec map(self, f) {
+    let ret = [];
+    var i = 0;
+    while i < self.len {
+        vecPush(ret, f(self[i], i));
+        i += 1;
+    };
+    ret
+}
 
 fn callMethod(args, obj, key) {
     var st = structType(obj);

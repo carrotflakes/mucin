@@ -13,6 +13,7 @@ pub struct Vm<'gc> {
     mc: &'gc Mutation<'gc>,
     frames: Vec<(Gc<'gc, Function<'gc>>, usize, Vec<Env<'gc>>)>,
     values: Vec<Value<'gc>>,
+    strict_arity: bool,
 }
 
 impl<'gc> Vm<'gc> {
@@ -21,6 +22,7 @@ impl<'gc> Vm<'gc> {
             mc,
             frames: vec![],
             values: vec![],
+            strict_arity: false,
         }
     }
 
@@ -129,20 +131,21 @@ impl<'gc> Vm<'gc> {
                 }
                 Instruction::Call(arity) => {
                     let arity = *arity;
-                    self.call_value(arity)?;
+                    let f = self.values.pop().unwrap();
+                    self.call(f, arity)?;
                 }
                 Instruction::CallWithUnpack(len) => {
                     let len = *len;
                     let f = self.values.pop().unwrap();
-                    let mut vec = Vec::with_capacity(len);
-                    for v in self.values.split_off(self.values.len() - len) {
+                    let base_len = self.values.len() - len;
+                    for v in self.values.split_off(base_len) {
                         match &v {
-                            Value::Tuple(e) if e.len() == 1 => vec.push(e[0].clone()),
-                            Value::Vec(v) => vec.extend(v.borrow().clone()),
+                            Value::Tuple(e) if e.len() == 1 => self.values.push(e[0].clone()),
+                            Value::Vec(v) => self.values.extend(v.borrow().clone()),
                             _ => panic!("unexpected value"),
                         }
                     }
-                    self.call(f, vec)?;
+                    self.call(f, self.values.len() - base_len)?;
                 }
                 Instruction::Return => {
                     self.frames.pop();
@@ -322,17 +325,18 @@ impl<'gc> Vm<'gc> {
         Ok(self.values.pop().unwrap())
     }
 
-    fn call_value(&mut self, arity: usize) -> Result<(), String> {
-        match self.values.pop().unwrap() {
+    fn call(&mut self, f: Value<'gc>, args_len: usize) -> Result<(), String> {
+        match f {
             Value::NativeFn(nf) => {
-                arity_check(std::any::type_name_of_val(&nf.function), arity, nf.arity)?;
+                self.resize_args("nativeFn", nf.arity, args_len);
                 let len = self.values.len() - nf.arity;
                 let value = (nf.function)(self.mc, &self.values[len..])?;
                 self.values.truncate(len);
                 self.values.push(value);
             }
             Value::Closure(closure) => {
-                arity_check(&closure.function.name, arity, closure.function.arity)?;
+                let arity = closure.function.arity;
+                self.resize_args(&closure.function.name, arity, args_len);
                 let mut env =
                     vec![Value::Unit; closure.function.frame.fields.len()].into_boxed_slice();
                 for i in 0..arity {
@@ -355,51 +359,18 @@ impl<'gc> Vm<'gc> {
         Ok(())
     }
 
-    fn call(&mut self, f: Value<'gc>, mut args: Vec<Value<'gc>>) -> Result<(), String> {
-        match f {
-            Value::NativeFn(nf) => {
-                arity_check(
-                    std::any::type_name_of_val(&nf.function),
-                    args.len(),
-                    nf.arity,
-                )?;
-                let value = (nf.function)(self.mc, &args)?;
-                self.values.push(value);
-            }
-            Value::Closure(closure) => {
-                arity_check(&closure.function.name, args.len(), closure.function.arity)?;
-                let mut env =
-                    vec![Value::Unit; closure.function.frame.fields.len()].into_boxed_slice();
-                let len = args.len();
-                for i in 0..args.len() {
-                    env[len - i - 1] = args.pop().unwrap();
-                }
-                let mut envs = Vec::with_capacity(closure.capture.len() + 1);
-                envs.extend(closure.capture.iter());
-                envs.push(Gc::new(
-                    self.mc,
-                    RefLock::new(Struct {
-                        struct_type: closure.function.frame,
-                        values: env,
-                    }),
-                ));
-                self.frames.push((closure.function.clone(), 0, envs));
-            }
-            callee => return Err(format!("expected function, got {:?}", callee)),
+    fn resize_args(&mut self, name: &str, expect: usize, got: usize) {
+        if self.strict_arity {
+            assert_eq!(
+                got, expect,
+                "function {}: expected {} arguments, got {}",
+                name, expect, got
+            );
         }
 
-        Ok(())
+        self.values
+            .resize(self.values.len() + expect - got, Value::Unit);
     }
-}
-
-fn arity_check(name: &str, expect: usize, got: usize) -> Result<(), String> {
-    if expect != got {
-        return Err(format!(
-            "function {:?} expected {} arguments, got {}",
-            name, expect, got
-        ));
-    }
-    Ok(())
 }
 
 #[test]
@@ -407,7 +378,7 @@ fn test_stack_trace() {
     let src = r#"
 fn main(): a()
 fn a(): b()
-fn b(): a(1)
+fn b(): panic("error")
 "#;
     let mut runtime = crate::runtime::Runtime::new();
     runtime.push_env_from_src(src).unwrap();

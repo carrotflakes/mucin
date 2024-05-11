@@ -211,7 +211,7 @@ fn nf_index<'gc>(_: &Mutation, values: &[Value<'gc>]) -> Result<Value<'gc>, Stri
     Ok(match &values[0] {
         Value::Tuple(t) => match &values[1] {
             Value::Int(i) => t[*i as usize].clone(),
-            _ => return Err("indexing with non-integer value".to_owned()),
+            _ => return Err(format!("indexing with non-integer value: {:?}", values[1])),
         },
         Value::Vec(v) => match &values[1] {
             Value::Int(i) => v.borrow().get(*i as usize).cloned().unwrap_or(Value::Null),
