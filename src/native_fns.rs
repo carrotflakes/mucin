@@ -214,7 +214,7 @@ fn nf_index<'gc>(_: &Mutation, values: &[Value<'gc>]) -> Result<Value<'gc>, Stri
             _ => return Err(format!("indexing with non-integer value: {:?}", values[1])),
         },
         Value::Vec(v) => match &values[1] {
-            Value::Int(i) => v.borrow().get(*i as usize).cloned().unwrap_or(Value::Null),
+            Value::Int(i) => v.borrow().get(*i as usize).cloned().unwrap_or(Value::Unit),
             Value::String(s) if s.as_str() == "len" => Value::Int(v.borrow().len() as i64),
             _ => return Err(format!("indexing with non-integer value: {:?}", values[1])),
         },
@@ -225,7 +225,7 @@ fn nf_index<'gc>(_: &Mutation, values: &[Value<'gc>]) -> Result<Value<'gc>, Stri
                 .iter()
                 .find(|(k, _)| k == s)
                 .map(|(_, v)| v.clone())
-                .unwrap_or(Value::Null),
+                .unwrap_or(Value::Unit),
             _ => return Err(format!("indexing with non-string value: {:?}", values[1])),
         },
         Value::Struct(s) => match &values[1] {
@@ -233,11 +233,11 @@ fn nf_index<'gc>(_: &Mutation, values: &[Value<'gc>]) -> Result<Value<'gc>, Stri
                 .borrow()
                 .get_by_str(k.as_str())
                 .cloned()
-                .unwrap_or(Value::Null),
+                .unwrap_or(Value::Unit),
             _ => return Err(format!("indexing with non-string value: {:?}", values[1])),
         },
         Value::StructType(st) => match &values[1] {
-            Value::String(k) => st.methods.borrow().get(k).cloned().unwrap_or(Value::Null),
+            Value::String(k) => st.methods.borrow().get(k).cloned().unwrap_or(Value::Unit),
             _ => return Err(format!("indexing with non-string value: {:?}", values[1])),
         },
         _ => {
@@ -277,7 +277,7 @@ fn nf_field_assign<'gc>(mc: &Mutation<'gc>, values: &[Value<'gc>]) -> Result<Val
                     if len < 0 {
                         return Err("negative length".to_owned());
                     }
-                    vec.resize(len as usize, Value::Null);
+                    vec.resize(len as usize, Value::Unit);
                     Ok(Value::Unit)
                 } else {
                     Err(format!("expected int, got: {:?}", values[2]))
