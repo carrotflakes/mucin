@@ -3,7 +3,6 @@ use std::{collections::HashMap, sync::Arc};
 use gc_arena::{lock::RefLock, Gc, Mutation};
 
 use crate::{
-    string::Str,
     value::{Dict, StructType, Value},
     vm::{Env, Vm},
 };
@@ -11,7 +10,7 @@ use crate::{
 pub struct Repository<'gc> {
     mc: &'gc Mutation<'gc>,
     files: Vec<File>,
-    main_path: Arc<String>,
+    root_path: Arc<String>,
 }
 
 pub struct File {
@@ -33,11 +32,11 @@ impl<'gc> Repository<'gc> {
     pub fn load<E>(
         mc: &'gc Mutation<'gc>,
         mut loader: impl FnMut(&str) -> Result<String, E>,
-        main_path: String,
+        root_path: String,
     ) -> Result<Self, Error<E>> {
-        let main_file = Arc::new(main_path);
+        let root_path = Arc::new(root_path);
         let mut files = vec![];
-        let mut queue = vec![main_file.clone()];
+        let mut queue = vec![root_path.clone()];
         while let Some(path) = queue.pop() {
             let src = loader(path.as_str()).map_err(Error::LoadError)?;
             let defs = crate::parser::parse(&src).map_err(Error::ParseError)?;
@@ -59,21 +58,18 @@ impl<'gc> Repository<'gc> {
         Ok(Self {
             mc,
             files,
-            main_path: main_file,
+            root_path,
         })
     }
 
-    pub fn build(
-        &mut self,
-        global_envs: &[(Vec<(Str, bool)>, Env<'gc>)],
-    ) -> Result<Env<'gc>, String> {
+    pub fn build(&mut self, outer_envs: &[Env<'gc>]) -> Result<Env<'gc>, String> {
         let mut build_results: HashMap<Arc<String>, BuildResult> = HashMap::new();
 
         for file in self.files.iter().rev() {
             let mut builder = crate::compile::Builder::new(self.mc);
             let mut envs = vec![];
-            for (names, env) in global_envs {
-                builder = builder.wrap_env(names.clone());
+            for env in outer_envs {
+                builder = builder.wrap_env(env.borrow().struct_type.fields.to_vec());
                 envs.push(env.clone());
             }
 
@@ -101,17 +97,17 @@ impl<'gc> Repository<'gc> {
             build_results.insert(file.path.clone(), BuildResult { env });
         }
 
-        Ok(build_results[&self.main_path].env.clone())
+        Ok(build_results[&self.root_path].env.clone())
     }
 
     pub fn all_files(&self) -> impl Iterator<Item = &File> {
         self.files.iter()
     }
 
-    pub fn main(&self) -> &File {
+    pub fn root(&self) -> &File {
         self.files
             .iter()
-            .find(|file| file.path.as_str() == self.main_path.as_str())
+            .find(|file| file.path.as_str() == self.root_path.as_str())
             .unwrap()
     }
 }

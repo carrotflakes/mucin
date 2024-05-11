@@ -54,6 +54,23 @@ impl Runtime {
         })
     }
 
+    pub fn push_env_from_files(
+        &mut self,
+        loader: impl FnMut(&str) -> Result<String, String>,
+        root_path: String,
+    ) -> Result<(), String> {
+        self.0.mutate_root(|mc, inner| {
+            let mut rep = crate::multi_file_builder::Repository::load(mc, loader, root_path)
+                .map_err(|e| match e {
+                    crate::multi_file_builder::Error::ParseError(e) => e,
+                    crate::multi_file_builder::Error::LoadError(e) => e,
+                })?;
+            let env = rep.build(&inner.envs)?;
+            inner.envs.push(env);
+            Ok(())
+        })
+    }
+
     pub fn pop_env(&mut self) {
         self.0.mutate_root(|_, inner| {
             inner.pop();
