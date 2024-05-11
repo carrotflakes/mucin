@@ -1,3 +1,4 @@
+mod lexer;
 pub mod macros;
 mod string;
 
@@ -5,12 +6,9 @@ use std::sync::Arc;
 
 use nom::{
     branch::alt,
-    bytes::complete::{is_not, tag, take_until},
-    character::complete::{alpha1, alphanumeric1, char, digit1, one_of},
-    combinator::{cut, eof, fail, map, not, opt, peek, recognize, value},
-    multi::{many0, many0_count, many1, separated_list0},
-    number::complete::double,
-    sequence::{pair, preceded, terminated},
+    combinator::{cut, fail, map, not, opt, peek, value},
+    multi::{many0, separated_list0},
+    sequence::{preceded, terminated},
     IResult,
 };
 
@@ -20,11 +18,13 @@ use crate::{
     },
     string::{intern, Str},
 };
-use string::parse_string as string;
 
-use self::macros::{
-    parser::{macro_call, macro_def},
-    Macro,
+use self::{
+    lexer::{lex, AsStr, Token},
+    macros::{
+        parser::{macro_call, macro_def},
+        Macro,
+    },
 };
 
 thread_local! {
@@ -38,74 +38,65 @@ pub fn parse(i: &str) -> Result<Vec<Definition>, String> {
         macros.extend(macros::builtin().into_iter().map(Arc::new));
     });
 
-    match program(i) {
-        Ok(("", defs)) => Ok(defs),
+    let tokens = lex(i).map_err(|err| format!("{:?}", err))?.1;
+
+    match program(&tokens) {
+        Ok(([], defs)) => Ok(defs),
         Ok((i, _)) => Err(format!("parse failed at: {:?}", i)),
         Err(err) => Err(format!("{:?}", err)),
     }
 }
 
-fn program(i: &str) -> IResult<&str, Vec<Definition>> {
-    let (i, _) = sp(i)?;
+fn program<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Vec<Definition>> {
     let (i, defs) = definitions(i)?;
-    let (i, _) = sp(i)?;
-    let (i, _) = eof(i)?;
     Ok((i, defs))
 }
 
-fn definitions(i: &str) -> IResult<&str, Vec<Definition>> {
+fn definitions<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Vec<Definition>> {
     map(
-        many0(preceded(
-            sp,
-            alt((
-                map(
-                    alt((variable_def, function_def, struct_def, module_def)),
-                    |def| vec![def],
-                ),
-                |i| {
-                    let (i, d) = macro_def(i)?;
-                    MACROS.with(|macros| {
-                        let mut macros = macros.borrow_mut();
-                        macros.push(Arc::new(Macro::Rules(d)));
-                    });
-                    Ok((i, vec![]))
-                },
-                |i| {
-                    let (i, (name, token)) = macro_call(i)?;
-                    let src = MACROS.with(|macros| {
-                        let macros = macros.borrow();
-                        let macro_ = macros
-                            .iter()
-                            .find(|m| m.name() == name)
-                            .expect("macro not found"); // TODO error mes
-                        macro_.expand(&token).unwrap()
-                    });
-                    let (_, defs) = definitions(&src).unwrap(); // TODO
-                    Ok((i, defs))
-                },
-            )),
-        )),
+        many0(alt((
+            map(
+                alt((variable_def, function_def, struct_def, module_def)),
+                |def| vec![def],
+            ),
+            |i| {
+                let (i, d) = macro_def(i)?;
+                MACROS.with(|macros| {
+                    let mut macros = macros.borrow_mut();
+                    macros.push(Arc::new(d));
+                });
+                Ok((i, vec![]))
+            },
+            |i| {
+                let (i, macro_call) = macro_call(i)?;
+                let src = MACROS.with(|macros| {
+                    let macros = macros.borrow();
+                    let macro_ = macros
+                        .iter()
+                        .find(|m| m.name() == macro_call.name)
+                        .expect("macro not found"); // TODO error mes
+                    macro_.expand(&macro_call.arg).unwrap()
+                });
+                let (_, defs) = definitions(&src).unwrap(); // TODO
+                Ok((i, defs))
+            },
+        ))),
         |defs| defs.into_iter().flatten().collect(),
     )(i)
 }
 
-fn variable_def(i: &str) -> IResult<&str, Definition> {
-    let (i, keyword) = alt((keyword("let"), keyword("var")))(i)?;
-    let (i, _) = sp(i)?;
+fn variable_def<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Definition> {
+    let (i, mutable) = alt((value(false, keyword("let")), value(true, keyword("var"))))(i)?;
 
-    let mutable = keyword == "var";
     cut(move |i| {
         let (i, name) = identifier(i)?;
-        let (i, _) = sp(i)?;
-        let (i, _) = tag("=")(i)?;
-        let (i, _) = sp(i)?;
+        let (i, _) = op("=")(i)?;
         let (i, expr) = control(i)?;
-        let (i, _) = sp(i)?;
-        let (i, _) = tag(";")(i)?;
+        let (i, _) = op(";")(i)?;
         Ok((
             i,
             Definition::Variable {
-                name: intern(name),
+                name,
                 mutable,
                 expr,
             },
@@ -113,115 +104,91 @@ fn variable_def(i: &str) -> IResult<&str, Definition> {
     })(i)
 }
 
-fn function_def(i: &str) -> IResult<&str, Definition> {
+fn function_def<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Definition> {
     let (i, _) = keyword("fn")(i)?;
-    let (i, _) = sp(i)?;
     cut(alt((
         |i| {
             let (i, receiver) = indexing(i)?;
-            let (i, _) = sp(i)?;
             let (i, name) = identifier(i)?;
-            let (i, _) = sp(i)?;
-            let (i, _) = tag("(")(i)?;
-            let (i, _) = sp(i)?;
-            let (i, args) = separated_list0(preceded(sp, char(',')), preceded(sp, identifier))(i)?;
-            let (i, _) = sp(i)?;
-            let (i, _) = tag(")")(i)?;
-            let (i, _) = sp(i)?;
+            let (i, _) = paren('(')(i)?;
+            let (i, args) = separated_list0(op(","), identifier)(i)?;
+            let (i, _) = paren(')')(i)?;
             let (i, body) = body(i)?;
             Ok((
                 i,
                 Definition::Method {
                     receiver,
-                    function: Function {
-                        name: intern(name),
-                        args: args.into_iter().map(intern).collect(),
-                        body,
-                    },
+                    function: Function { name, args, body },
                 },
             ))
         },
         |i| {
             let (i, name) = identifier(i)?;
-            let (i, _) = sp(i)?;
-            let (i, _) = tag("(")(i)?;
-            let (i, _) = sp(i)?;
-            let (i, args) = separated_list0(preceded(sp, char(',')), preceded(sp, identifier))(i)?;
-            let (i, _) = sp(i)?;
-            let (i, _) = tag(")")(i)?;
-            let (i, _) = sp(i)?;
+            let (i, _) = paren('(')(i)?;
+            let (i, args) = separated_list0(op(","), identifier)(i)?;
+            let (i, _) = paren(')')(i)?;
             let (i, body) = body(i)?;
-            Ok((
-                i,
-                Definition::Function(Function {
-                    name: intern(name),
-                    args: args.into_iter().map(intern).collect(),
-                    body,
-                }),
-            ))
+            Ok((i, Definition::Function(Function { name, args, body })))
         },
     )))(i)
 }
 
-fn struct_def(i: &str) -> IResult<&str, Definition> {
+fn struct_def<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Definition> {
     let (i, _) = keyword("struct")(i)?;
-    let (i, _) = sp(i)?;
     cut(|i| {
         let (i, name) = identifier(i)?;
-        let (i, _) = sp(i)?;
-        let (i, _) = tag("{")(i)?;
-        let (i, _) = sp(i)?;
+        let (i, _) = paren('{')(i)?;
         let (i, fields) = comma_separated_list0(identifier)(i)?;
-        let (i, _) = sp(i)?;
-        let (i, _) = tag("}")(i)?;
+        let (i, _) = paren('}')(i)?;
         Ok((
             i,
             Definition::Struct {
-                name: intern(name),
-                fields: fields.into_iter().map(|f| (intern(f), true)).collect(),
+                name,
+                fields: fields.into_iter().map(|f| (f, true)).collect(),
             },
         ))
     })(i)
 }
 
-fn module_def(i: &str) -> IResult<&str, Definition> {
+fn module_def<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Definition> {
     let (i, _) = keyword("mod")(i)?;
-    let (i, _) = sp(i)?;
     cut(|i| {
         let (i, name) = identifier(i)?;
-        let (i, _) = sp(i)?;
-        let (i, _) = tag(";")(i)?;
-        Ok((i, Definition::Module(intern(name))))
+        let (i, _) = op(";")(i)?;
+        Ok((i, Definition::Module(name)))
     })(i)
 }
 
-fn body(i: &str) -> IResult<&str, Expression> {
+fn body<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
     let (i, _) = colon_if_not_keyword(i)?;
-    let (i, _) = sp(i)?;
     control(i)
 }
 
-fn colon_if_not_keyword(i: &str) -> IResult<&str, ()> {
+fn colon_if_not_keyword<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], ()> {
     alt((
         terminated(
-            peek(alt((value((), any_keyword), value((), one_of("[{"))))),
-            opt(tag(":")),
+            peek(alt((
+                value((), any_keyword),
+                value((), alt((paren('['), paren('{')))),
+            ))),
+            opt(op(":")),
         ),
-        value((), tag(":")),
+        value((), op(":")),
     ))(i)
 }
 
-fn control(i: &str) -> IResult<&str, Expression> {
+fn control<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
     alt((
+        // map(macro_call, Expression::MacroCall),
         |i| {
-            let (i, (name, token)) = macro_call(i)?;
+            let (i, macro_call) = macro_call(i)?;
             let src = MACROS.with(|macros| {
                 let macros = macros.borrow();
                 let macro_ = macros
                     .iter()
-                    .find(|m| m.name() == name)
+                    .find(|m| m.name() == macro_call.name)
                     .expect("macro not found");
-                macro_.expand(&token).unwrap()
+                macro_.expand(&macro_call.arg).unwrap()
             });
             let (_, expr) = control(&src).unwrap(); // TODO
             Ok((i, expr))
@@ -229,25 +196,23 @@ fn control(i: &str) -> IResult<&str, Expression> {
         return_expr,
         |i| {
             let (i, _) = keyword("break")(i)?;
-            let (i, _) = sp(i)?;
-            let (i, label) = opt(terminated(label, sp))(i)?;
+            let (i, label) = opt(label)(i)?;
             let (i, expr) = cut(opt(or_cond))(i)?;
             Ok((
                 i,
                 Expression::Break {
-                    label: label.map(intern).unwrap_or_default(),
+                    label: label.unwrap_or_default(),
                     expr: expr.map(Box::new),
                 },
             ))
         },
         |i| {
             let (i, _) = keyword("continue")(i)?;
-            let (i, _) = sp(i)?;
-            let (i, label) = opt(terminated(label, sp))(i)?;
+            let (i, label) = opt(label)(i)?;
             Ok((
                 i,
                 Expression::Continue {
-                    label: label.map(intern).unwrap_or_default(),
+                    label: label.unwrap_or_default(),
                 },
             ))
         },
@@ -255,9 +220,8 @@ fn control(i: &str) -> IResult<&str, Expression> {
     ))(i)
 }
 
-fn return_expr(i: &str) -> IResult<&str, Expression> {
+fn return_expr<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
     let (i, _) = keyword("return")(i)?;
-    let (i, _) = sp(i)?;
     let (i, value) = cut(opt(control))(i)?;
     Ok((
         i,
@@ -267,13 +231,13 @@ fn return_expr(i: &str) -> IResult<&str, Expression> {
     ))
 }
 
-fn or_cond(i: &str) -> IResult<&str, Expression> {
+fn or_cond<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
     left_assoc(
         and_cond,
-        tag("||"),
+        op("||"),
         |op, left, right| {
             op_call(
-                match op {
+                match op.as_str() {
                     "||" => "__or",
                     _ => unreachable!(),
                 },
@@ -284,13 +248,13 @@ fn or_cond(i: &str) -> IResult<&str, Expression> {
     )
 }
 
-fn and_cond(i: &str) -> IResult<&str, Expression> {
+fn and_cond<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
     left_assoc(
         equality,
-        tag("&&"),
+        op("&&"),
         |op, left, right| {
             op_call(
-                match op {
+                match op.as_str() {
                     "&&" => "__and",
                     _ => unreachable!(),
                 },
@@ -301,21 +265,12 @@ fn and_cond(i: &str) -> IResult<&str, Expression> {
     )
 }
 
-fn equality(i: &str) -> IResult<&str, Expression> {
+fn equality<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
     let (mut i, mut expr) = additive(i)?;
 
     loop {
         let (i_, right) = opt(|i| {
-            let (i, _) = sp(i)?;
-            let (i, op) = alt((
-                tag("=="),
-                tag("!="),
-                tag(">="),
-                tag(">"),
-                tag("<="),
-                tag("<"),
-            ))(i)?;
-            let (i, _) = sp(i)?;
+            let (i, op) = alt((op("=="), op("!="), op(">="), op(">"), op("<="), op("<")))(i)?;
             let (i, right) = additive(i)?;
             Ok((i, (op, right)))
         })(i)?;
@@ -323,7 +278,7 @@ fn equality(i: &str) -> IResult<&str, Expression> {
 
         if let Some((op, right)) = right {
             expr = op_call(
-                match op {
+                match op.as_str() {
                     "==" => "__eq",
                     "!=" => "__ne",
                     ">" => "__gt",
@@ -342,11 +297,11 @@ fn equality(i: &str) -> IResult<&str, Expression> {
     Ok((i, expr))
 }
 
-fn additive(i: &str) -> IResult<&str, Expression> {
+fn additive<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
     left_assoc(
         multicative,
-        alt((tag("+"), tag("-"))),
-        |op, left, right| match op {
+        alt((op("+"), op("-"))),
+        |op, left, right| match op.as_str() {
             "+" => op_call("__add", vec![left, right]),
             "-" => op_call("__sub", vec![left, right]),
             _ => unreachable!(),
@@ -355,11 +310,11 @@ fn additive(i: &str) -> IResult<&str, Expression> {
     )
 }
 
-fn multicative(i: &str) -> IResult<&str, Expression> {
+fn multicative<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
     left_assoc(
         unary,
-        alt((tag("*"), tag("/"), tag("%"))),
-        |op, left, right| match op {
+        alt((op("*"), op("/"), op("%"))),
+        |op, left, right| match op.as_str() {
             "*" => op_call("__mul", vec![left, right]),
             "/" => op_call("__div", vec![left, right]),
             "%" => op_call("__rem", vec![left, right]),
@@ -369,16 +324,15 @@ fn multicative(i: &str) -> IResult<&str, Expression> {
     )
 }
 
-fn unary(i: &str) -> IResult<&str, Expression> {
+fn unary<'a, S: AsStr>(i: &'a [Token<S>]) -> IResult<&'a [Token<S>], Expression> {
     alt((
-        |i| {
-            let (i, op) = alt((tag("-"), tag("!")))(i)?;
-            let (i, _) = sp(i)?;
+        |i: &'a [Token<S>]| {
+            let (i, op) = alt((op("-"), op("!")))(i)?;
             let (i, expr) = unary(i)?;
             Ok((
                 i,
                 op_call(
-                    match op {
+                    match op.as_str() {
                         "-" => "__neg",
                         "!" => "__not",
                         _ => unreachable!(),
@@ -391,28 +345,22 @@ fn unary(i: &str) -> IResult<&str, Expression> {
     ))(i)
 }
 
-fn indexing(i: &str) -> IResult<&str, Expression> {
+fn indexing<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
     let (mut i, mut expr) = factor(i)?;
     loop {
         if let (i_, Some(index)) = opt(|i| {
-            let (i, _) = sp(i)?;
-            let (i, _) = tag("[")(i)?;
-            let (i, _) = sp(i)?;
+            let (i, _) = paren('[')(i)?;
             let (i, index) = control(i)?;
-            let (i, _) = sp(i)?;
-            let (i, _) = tag("]")(i)?;
+            let (i, _) = paren(']')(i)?;
             Ok((i, index))
         })(i)?
         {
             i = i_;
             expr = op_call("__index", vec![expr, index]);
         } else if let (i_, Some(args)) = opt(|i| {
-            let (i, _) = sp(i)?;
-            let (i, _) = tag("(")(i)?;
-            let (i, _) = sp(i)?;
+            let (i, _) = paren('(')(i)?;
             let (i, args) = comma_separated_list0(vec_append)(i)?;
-            let (i, _) = sp(i)?;
-            let (i, _) = tag(")")(i)?;
+            let (i, _) = paren(')')(i)?;
             Ok((i, args))
         })(i)?
         {
@@ -422,13 +370,10 @@ fn indexing(i: &str) -> IResult<&str, Expression> {
                 args,
             };
         } else if let (i_, Some(appends)) = opt(|i| {
-            let (i, _) = sp(i)?;
             let (i, _) = not(block)(i)?;
-            let (i, _) = tag("{")(i)?;
-            let (i, _) = sp(i)?;
+            let (i, _) = paren('{')(i)?;
             let (i, appends) = comma_separated_list0(dict_append)(i)?;
-            let (i, _) = sp(i)?;
-            let (i, _) = tag("}")(i)?;
+            let (i, _) = paren('}')(i)?;
             Ok((i, appends))
         })(i)?
         {
@@ -438,9 +383,7 @@ fn indexing(i: &str) -> IResult<&str, Expression> {
                 appends,
             };
         } else if let (i_, Some(ident)) = opt(|i| {
-            let (i, _) = sp(i)?;
-            let (i, _) = tag(".")(i)?;
-            let (i, _) = sp(i)?;
+            let (i, _) = op(".")(i)?;
             let (i, ident) = identifier(i)?;
             Ok((i, ident))
         })(i)?
@@ -451,7 +394,7 @@ fn indexing(i: &str) -> IResult<&str, Expression> {
                 vec![
                     expr,
                     Expression::Literal {
-                        value: Literal::String(intern(ident)),
+                        value: Literal::String(ident),
                     },
                 ],
             );
@@ -462,14 +405,12 @@ fn indexing(i: &str) -> IResult<&str, Expression> {
     Ok((i, expr))
 }
 
-fn factor(i: &str) -> IResult<&str, Expression> {
+fn factor<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
     alt((
         |i| {
-            let (i, _) = tag("(")(i)?;
-            let (i, _) = sp(i)?;
+            let (i, _) = paren('(')(i)?;
             let (i, expr) = control(i)?;
-            let (i, _) = sp(i)?;
-            let (i, _) = tag(")")(i)?;
+            let (i, _) = paren(')')(i)?;
             Ok((i, expr))
         },
         block,
@@ -478,9 +419,7 @@ fn factor(i: &str) -> IResult<&str, Expression> {
         dict,
         tuple,
         map(literal, |value| Expression::Literal { value }),
-        map(identifier, |name| Expression::Variable {
-            name: intern(name),
-        }),
+        map(identifier, |name| Expression::Variable { name }),
         cond_if,
         loop_,
         while_,
@@ -488,59 +427,51 @@ fn factor(i: &str) -> IResult<&str, Expression> {
     ))(i)
 }
 
-fn closure(i: &str) -> IResult<&str, Expression> {
+fn closure<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
     alt((closure_fn, closure_pipe))(i)
 }
 
-fn closure_fn(i: &str) -> IResult<&str, Expression> {
+fn closure_fn<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
     let (i, _) = keyword("fn")(i)?;
-    let (i, _) = sp(i)?;
-    let (i, _) = tag("(")(i)?;
-    let (i, _) = sp(i)?;
-    let (i, args) = separated_list0(preceded(sp, char(',')), preceded(sp, identifier))(i)?;
-    let (i, _) = sp(i)?;
-    let (i, _) = tag(")")(i)?;
-    let (i, _) = sp(i)?;
+    let (i, _) = paren('(')(i)?;
+    let (i, args) = separated_list0(op(","), identifier)(i)?;
+    let (i, _) = paren(')')(i)?;
     let (i, body) = body(i)?;
     Ok((
         i,
         Expression::Closure(Box::new(Function {
             name: intern(""),
-            args: args.into_iter().map(intern).collect(),
+            args,
             body,
         })),
     ))
 }
 
-fn closure_pipe(i: &str) -> IResult<&str, Expression> {
-    let (i, _) = tag("|")(i)?;
-    let (i, _) = sp(i)?;
-    let (i, args) = separated_list0(preceded(sp, char(',')), preceded(sp, identifier))(i)?;
-    let (i, _) = sp(i)?;
-    let (i, _) = tag("|")(i)?;
-    let (i, _) = sp(i)?;
+fn closure_pipe<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
+    let (i, args) = alt((value(vec![], op("||")), |i| {
+        let (i, _) = op("|")(i)?;
+        let (i, args) = separated_list0(op(","), identifier)(i)?;
+        let (i, _) = op("|")(i)?;
+        Ok((i, args))
+    }))(i)?;
     let (i, body) = cut(control)(i)?;
     Ok((
         i,
         Expression::Closure(Box::new(Function {
             name: intern(""),
-            args: args.into_iter().map(intern).collect(),
+            args,
             body,
         })),
     ))
 }
 
-fn cond_if(i: &str) -> IResult<&str, Expression> {
+fn cond_if<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
     let (i, _) = keyword("if")(i)?;
-    let (i, _) = sp(i)?;
     cut(|i| {
         let (i, condition) = control(i)?;
-        let (i, _) = sp(i)?;
         let (i, then) = body(i)?;
         let (i, else_) = opt(|i| {
-            let (i, _) = sp(i)?;
             let (i, _) = keyword("else")(i)?;
-            let (i, _) = sp(i)?;
             let (i, else_) = body(i)?;
             Ok((i, else_))
         })(i)?;
@@ -555,10 +486,9 @@ fn cond_if(i: &str) -> IResult<&str, Expression> {
     })(i)
 }
 
-fn loop_(i: &str) -> IResult<&str, Expression> {
-    let (i, label) = opt(terminated(labeled, sp))(i)?;
+fn loop_<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
+    let (i, label) = opt(labeled)(i)?;
     let (i, _) = keyword("loop")(i)?;
-    let (i, _) = sp(i)?;
 
     let label = label.unwrap_or_default();
     cut(move |i| {
@@ -566,7 +496,7 @@ fn loop_(i: &str) -> IResult<&str, Expression> {
         Ok((
             i,
             Expression::Labeled {
-                label: intern(label),
+                label: label.clone(),
                 body: Box::new(Expression::Loop {
                     body: Box::new(body),
                 }),
@@ -575,26 +505,25 @@ fn loop_(i: &str) -> IResult<&str, Expression> {
     })(i)
 }
 
-fn while_(i: &str) -> IResult<&str, Expression> {
-    let (i, label) = opt(terminated(labeled, sp))(i)?;
+fn while_<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
+    let (i, label) = opt(labeled)(i)?;
     let (i, _) = keyword("while")(i)?;
-    let (i, _) = sp(i)?;
 
     let label = label.unwrap_or_default();
     cut(move |i| {
         let (i, condition) = control(i)?;
-        let (i, _) = sp(i)?;
+
         let (i, body) = body(i)?;
         Ok((
             i,
             Expression::Labeled {
-                label: intern(label),
+                label: label.clone(),
                 body: Box::new(Expression::Loop {
                     body: Box::new(Expression::If {
                         condition: Box::new(condition),
                         then: Box::new(body),
                         else_: Some(Box::new(Expression::Break {
-                            label: intern(label),
+                            label: label.clone(),
                             expr: None,
                         })),
                     }),
@@ -604,19 +533,17 @@ fn while_(i: &str) -> IResult<&str, Expression> {
     })(i)
 }
 
-fn labeled(i: &str) -> IResult<&str, &str> {
+fn labeled<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Str> {
     let (i, label) = label(i)?;
-    let (i, _) = sp(i)?;
-    let (i, _) = tag(":")(i)?;
+    let (i, _) = op(":")(i)?;
     Ok((i, label))
 }
 
-fn block(i: &str) -> IResult<&str, Expression> {
-    let (i, _) = tag("{")(i)?;
-    let (i, statements) = many0(preceded(sp, statement_semicolon))(i)?;
-    let (i, expr) = opt(preceded(sp, control))(i)?;
-    let (i, _) = sp(i)?;
-    let (i, _) = tag("}")(i)?;
+fn block<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
+    let (i, _) = paren('{')(i)?;
+    let (i, statements) = many0(statement_semicolon)(i)?;
+    let (i, expr) = opt(control)(i)?;
+    let (i, _) = paren('}')(i)?;
 
     if statements.is_empty() && expr.is_some() {
         return Ok((i, expr.unwrap()));
@@ -631,17 +558,13 @@ fn block(i: &str) -> IResult<&str, Expression> {
     ))
 }
 
-fn match_expr(i: &str) -> IResult<&str, Expression> {
+fn match_expr<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
     let (i, _) = keyword("match")(i)?;
-    let (i, _) = sp(i)?;
     cut(|i| {
         let (i, expr) = control(i)?;
-        let (i, _) = sp(i)?;
-        let (i, _) = tag("{")(i)?;
-        let (i, _) = sp(i)?;
+        let (i, _) = paren('{')(i)?;
         let (i, arms) = comma_separated_list0(match_arm)(i)?;
-        let (i, _) = sp(i)?;
-        let (i, _) = tag("}")(i)?;
+        let (i, _) = paren('}')(i)?;
         Ok((
             i,
             Expression::Match {
@@ -652,26 +575,21 @@ fn match_expr(i: &str) -> IResult<&str, Expression> {
     })(i)
 }
 
-fn match_arm(i: &str) -> IResult<&str, (Pattern, Expression)> {
+fn match_arm<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], (Pattern, Expression)> {
     let (i, pattern) = pattern(i)?;
-    let (i, _) = sp(i)?;
-    let (i, _) = tag("=>")(i)?;
-    let (i, _) = sp(i)?;
+    let (i, _) = op("=>")(i)?;
     let (i, body) = control(i)?;
     Ok((i, (pattern, body)))
 }
 
-fn pattern(i: &str) -> IResult<&str, Pattern> {
+fn pattern<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Pattern> {
     alt((
-        map(tag("_"), |_| Pattern::Wildcard),
+        map(wildcard, |_| Pattern::Wildcard),
         |i| {
-            let (i, _) = tag("[")(i)?;
-            let (i, _) = sp(i)?;
+            let (i, _) = paren('[')(i)?;
             let (i, exprs) = comma_separated_list0(pattern)(i)?;
-            let (i, _) = sp(i)?;
-            let (i, allow_tail) = opt(tag(".."))(i)?;
-            let (i, _) = sp(i)?;
-            let (i, _) = tag("]")(i)?;
+            let (i, allow_tail) = opt(op(".."))(i)?;
+            let (i, _) = paren(']')(i)?;
             Ok((
                 i,
                 Pattern::Vec {
@@ -682,28 +600,20 @@ fn pattern(i: &str) -> IResult<&str, Pattern> {
         },
         |i| {
             let (i, constructor) = opt(identifier)(i)?;
-            let (i, _) = sp(i)?;
-            let (i, _) = tag("{")(i)?;
-            let (i, _) = sp(i)?;
+            let (i, _) = paren('{')(i)?;
             let (i, fields) = comma_separated_list0(|i| {
                 let (i, name) = identifier(i)?;
-                let (i, _) = sp(i)?;
-                let (i, _) = tag(":")(i)?;
-                let (i, _) = sp(i)?;
+                let (i, _) = op(":")(i)?;
                 let (i, pattern) = pattern(i)?;
                 Ok((i, (name, pattern)))
             })(i)?;
-            let (i, _) = sp(i)?;
-            let (i, _) = tag("}")(i)?;
-            let fields = fields
-                .into_iter()
-                .map(|(name, pat)| (intern(name), pat))
-                .collect();
+            let (i, _) = paren('}')(i)?;
+            let fields = fields.into_iter().map(|(name, pat)| (name, pat)).collect();
             Ok((
                 i,
                 if let Some(constructor) = constructor {
                     Pattern::Struct {
-                        constructor: intern(constructor),
+                        constructor,
                         fields,
                     }
                 } else {
@@ -713,11 +623,11 @@ fn pattern(i: &str) -> IResult<&str, Pattern> {
         },
         |i| {
             let (i, name) = identifier(i)?;
-            let (i, type_) = opt(preceded(sp, preceded(tag(":"), preceded(sp, pattern))))(i)?;
+            let (i, type_) = opt(preceded(op(":"), pattern))(i)?;
             Ok((
                 i,
                 Pattern::Variable {
-                    name: intern(name),
+                    name,
                     type_: type_.map(Box::new),
                 },
             ))
@@ -726,25 +636,21 @@ fn pattern(i: &str) -> IResult<&str, Pattern> {
     ))(i)
 }
 
-fn statement(i: &str) -> IResult<&str, Statement> {
+fn statement<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Statement> {
     alt((let_statement, assign_statement))(i)
 }
 
-fn let_statement(i: &str) -> IResult<&str, Statement> {
-    let (i, keyword) = alt((keyword("let"), keyword("var")))(i)?;
-    let (i, _) = sp(i)?;
+fn let_statement<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Statement> {
+    let (i, mutable) = alt((value(false, keyword("let")), value(true, keyword("var"))))(i)?;
 
-    let mutable = keyword == "var";
     cut(move |i| {
         let (i, name) = identifier(i)?;
-        let (i, _) = sp(i)?;
-        let (i, _) = tag("=")(i)?;
-        let (i, _) = sp(i)?;
+        let (i, _) = op("=")(i)?;
         let (i, value) = control(i)?;
         Ok((
             i,
             Statement::Let {
-                name: intern(name),
+                name,
                 mutable,
                 expr: value,
             },
@@ -752,17 +658,15 @@ fn let_statement(i: &str) -> IResult<&str, Statement> {
     })(i)
 }
 
-fn assign_statement(i: &str) -> IResult<&str, Statement> {
+fn assign_statement<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Statement> {
     let (i, expr) = indexing(i)?;
     match expr {
         Expression::Op { name, mut args } if name.as_str() == "__index" => {
             let field = args.pop().unwrap();
             let dict = args.pop().unwrap();
 
-            let (i, _) = sp(i)?;
-            let (i, op) = opt(assignable_op)(i)?;
-            let (i, _) = tag("=")(i)?;
-            let (i, _) = sp(i)?;
+            let (i, o) = opt(assignable_op)(i)?;
+            let (i, _) = op("=")(i)?;
             let (i, expr) = control(i)?;
             Ok((
                 i,
@@ -770,22 +674,20 @@ fn assign_statement(i: &str) -> IResult<&str, Statement> {
                     dict,
                     field,
                     expr,
-                    op: op.map(op_to_str),
+                    op: o.map(op_to_str),
                 },
             ))
         }
         Expression::Variable { name } => {
-            let (i, _) = sp(i)?;
-            let (i, op) = opt(assignable_op)(i)?;
-            let (i, _) = tag("=")(i)?;
-            let (i, _) = sp(i)?;
+            let (i, o) = opt(assignable_op)(i)?;
+            let (i, _) = op("=")(i)?;
             let (i, expr) = control(i)?;
             Ok((
                 i,
                 Statement::Assign {
                     name,
                     expr,
-                    op: op.map(op_to_str),
+                    op: o.map(op_to_str),
                 },
             ))
         }
@@ -793,12 +695,12 @@ fn assign_statement(i: &str) -> IResult<&str, Statement> {
     }
 }
 
-fn assignable_op(i: &str) -> IResult<&str, &str> {
-    alt((tag("+"), tag("-"), tag("*"), tag("/"), tag("%")))(i)
+fn assignable_op<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], &S> {
+    alt((op("+"), op("-"), op("*"), op("/"), op("%")))(i)
 }
 
-fn op_to_str(str: &str) -> Str {
-    intern(match str {
+fn op_to_str<S: AsStr>(token: &S) -> Str {
+    intern(match token.as_str() {
         "+" => "__add",
         "-" => "__sub",
         "*" => "__mul",
@@ -808,180 +710,183 @@ fn op_to_str(str: &str) -> Str {
     })
 }
 
-fn statement_semicolon(i: &str) -> IResult<&str, Statement> {
+fn statement_semicolon<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Statement> {
     let (i, stmt) = alt((
         statement,
         map(control, |expr| Statement::Expression { expr }),
     ))(i)?;
-    let (i, _) = sp(i)?;
-    let (i, _) = tag(";")(i)?;
+    let (i, _) = op(";")(i)?;
     Ok((i, stmt))
 }
 
-fn vec(i: &str) -> IResult<&str, Expression> {
-    let (i, _) = tag("[")(i)?;
-    let (i, _) = sp(i)?;
+fn vec<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
+    let (i, _) = paren('[')(i)?;
     let (i, appends) = comma_separated_list0(vec_append)(i)?;
-    let (i, _) = sp(i)?;
-    let (i, _) = tag("]")(i)?;
+    let (i, _) = paren(']')(i)?;
     Ok((i, Expression::Vec { appends }))
 }
 
-fn dict(i: &str) -> IResult<&str, Expression> {
-    let (i, _) = tag("{")(i)?;
-    let (i, _) = sp(i)?;
+fn dict<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
+    let (i, _) = paren('{')(i)?;
     let (i, appends) = comma_separated_list0(dict_append)(i)?;
-    let (i, _) = sp(i)?;
-    let (i, _) = tag("}")(i)?;
+    let (i, _) = paren('}')(i)?;
     Ok((i, Expression::Dict { appends }))
 }
 
-fn vec_append(i: &str) -> IResult<&str, VecAppend> {
+fn vec_append<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], VecAppend> {
     alt((
         |i| {
             let (i, expr) = control(i)?;
             Ok((i, VecAppend::Element(expr)))
         },
         |i| {
-            let (i, _) = tag("..")(i)?;
-            let (i, _) = sp(i)?;
+            let (i, _) = op("..")(i)?;
             let (i, expr) = control(i)?;
             Ok((i, VecAppend::Spread(expr)))
         },
     ))(i)
 }
 
-fn dict_append(i: &str) -> IResult<&str, DictAppend> {
+fn dict_append<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], DictAppend> {
     alt((
         |i| {
             let (i, name) = identifier(i)?;
-            let (i, _) = sp(i)?;
-            let (i, _) = tag(":")(i)?;
-            let (i, _) = sp(i)?;
+            let (i, _) = op(":")(i)?;
             let (i, expr) = control(i)?;
-            Ok((i, DictAppend::Field(intern(name), expr)))
+            Ok((i, DictAppend::Field(name, expr)))
         },
         |i| {
             let (i, name) = identifier(i)?;
-            let name = intern(name);
             Ok((
                 i,
                 DictAppend::Field(name.clone(), Expression::Variable { name }),
             ))
         },
         |i| {
-            let (i, _) = tag("..")(i)?;
-            let (i, _) = sp(i)?;
+            let (i, _) = op("..")(i)?;
             let (i, expr) = control(i)?;
             Ok((i, DictAppend::Spread(expr)))
         },
     ))(i)
 }
 
-fn tuple(i: &str) -> IResult<&str, Expression> {
-    let (i, _) = tag("(")(i)?;
-    let (i, _) = sp(i)?;
-    let (i, exprs) = separated_list0(preceded(sp, char(',')), preceded(sp, control))(i)?;
+fn tuple<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
+    let (i, _) = paren('(')(i)?;
+    let (i, exprs) = separated_list0(op(","), control)(i)?;
 
     if exprs.is_empty() {
         return fail(i);
     }
 
     let (i, _) = if exprs.len() == 1 {
-        let (i, _) = sp(i)?;
-        let (i, _) = tag(",")(i)?;
+        let (i, _) = op(",")(i)?;
         (i, ())
     } else {
         (i, ())
     };
-    let (i, _) = sp(i)?;
-    let (i, _) = tag(")")(i)?;
+    let (i, _) = paren(')')(i)?;
     Ok((i, Expression::Tuple { exprs }))
 }
 
-pub fn literal(i: &str) -> IResult<&str, Literal> {
-    alt((
-        map(tag("()"), |_| Literal::Unit),
-        map(string, |s| Literal::String(intern(&s))),
-        map(terminated(digit1, not(char('.'))), |s: &str| {
-            Literal::Int(s.parse().unwrap())
-        }),
-        map(double, |v| Literal::Float(v)),
-        map(keyword("true"), |_| Literal::Bool(true)),
-        map(keyword("false"), |_| Literal::Bool(false)),
-        map(keyword("null"), |_| Literal::Null),
-    ))(i)
+pub fn literal<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Literal> {
+    match i.first() {
+        Some(Token::String(s)) => Ok((&i[1..], Literal::String(s.clone()))),
+        Some(Token::Int(v)) => Ok((&i[1..], Literal::Int(*v))),
+        Some(Token::Float(v)) => Ok((&i[1..], Literal::Float(*v))),
+        Some(Token::Keyword(k)) if k.as_str() == "true" => Ok((&i[1..], Literal::Bool(true))),
+        Some(Token::Keyword(k)) if k.as_str() == "false" => Ok((&i[1..], Literal::Bool(false))),
+        Some(Token::Keyword(k)) if k.as_str() == "null" => Ok((&i[1..], Literal::Null)),
+        Some(Token::Paren('(')) => {
+            let (i, _) = paren('(')(i)?;
+            let (i, _) = paren(')')(i)?;
+            Ok((i, Literal::Unit))
+        }
+        _ => fail(i),
+    }
 }
 
-fn label(i: &str) -> IResult<&str, &str> {
-    let (i, _) = tag("'")(i)?;
+fn label<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Str> {
+    let (i, _) = op("'")(i)?;
     let (i, s) = identifier(i)?;
     Ok((i, s))
 }
 
-pub fn identifier(i: &str) -> IResult<&str, &str> {
-    let (i, _) = not(any_keyword)(i)?;
-
-    let (i, str) = recognize(pair(
-        alt((alpha1, tag("_"))),
-        many0_count(alt((alphanumeric1, tag("_")))),
-    ))(i)?;
-    Ok((i, str))
+pub fn identifier<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Str> {
+    if let Some(Token::Identifier(ident)) = i.first() {
+        return Ok((&i[1..], ident.interned()));
+    }
+    fail(i)
 }
 
-fn keyword<'a>(name: &'static str) -> impl FnMut(&'a str) -> IResult<&'a str, &'a str> {
-    terminated(tag(name), not(alt((alphanumeric1, tag("_")))))
+fn paren<S: AsStr>(name: char) -> impl FnMut(&[Token<S>]) -> IResult<&[Token<S>], Token<S>> {
+    move |i| {
+        if let Some(Token::Paren(c)) = i.first() {
+            if *c == name {
+                return Ok((&i[1..], Token::Paren(name)));
+            }
+        }
+        fail(i)
+    }
 }
 
-fn any_keyword(i: &str) -> IResult<&str, &str> {
-    terminated(
-        alt((
-            tag("fn"),
-            tag("struct"),
-            tag("let"),
-            tag("var"),
-            tag("return"),
-            tag("if"),
-            tag("else"),
-            tag("loop"),
-            tag("while"),
-            tag("for"),
-            tag("match"),
-            tag("break"),
-            tag("continue"),
-        )),
-        not(alt((alphanumeric1, tag("_")))),
-    )(i)
+fn wildcard<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], ()> {
+    if let Some(Token::Identifier(s)) = i.first() {
+        if s.as_str() == "_" {
+            return Ok((&i[1..], ()));
+        }
+    }
+    fail(i)
 }
 
-pub fn sp(i: &str) -> IResult<&str, ()> {
-    value((), opt(sp1))(i)
+fn keyword<S: AsStr>(name: &'static str) -> impl FnMut(&[Token<S>]) -> IResult<&[Token<S>], ()> {
+    move |i| {
+        if let Some(Token::Keyword(k)) = i.first() {
+            if k.as_str() == name {
+                return Ok((&i[1..], ()));
+            }
+        }
+        fail(i)
+    }
 }
 
-pub fn sp1(i: &str) -> IResult<&str, ()> {
-    const SP_CHARS: &str = " \t\r\n";
-
-    value((), many1(alt((value((), one_of(SP_CHARS)), comment))))(i)
-}
-
-pub fn comment(i: &str) -> IResult<&str, ()> {
+fn any_keyword<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], ()> {
     alt((
-        value((), pair(tag("//"), is_not("\n\r"))),
-        value((), pair(pair(tag("/*"), take_until("*/")), tag("*/"))),
+        keyword("fn"),
+        keyword("struct"),
+        keyword("let"),
+        keyword("var"),
+        keyword("return"),
+        keyword("if"),
+        keyword("else"),
+        keyword("loop"),
+        keyword("while"),
+        keyword("for"),
+        keyword("match"),
+        keyword("break"),
+        keyword("continue"),
     ))(i)
 }
 
-fn left_assoc<'a, C>(
-    mut child: impl FnMut(&'a str) -> IResult<&'a str, C>,
-    mut op: impl FnMut(&'a str) -> IResult<&'a str, &'a str>,
-    merge: impl Fn(&'a str, C, C) -> C,
-    i: &'a str,
-) -> IResult<&'a str, C> {
+fn op<S: AsStr>(name: &'static str) -> impl FnMut(&[Token<S>]) -> IResult<&[Token<S>], &S> {
+    move |i| {
+        if let Some(Token::Operator(k)) = i.first() {
+            if k.as_str() == name {
+                return Ok((&i[1..], k));
+            }
+        }
+        fail(i)
+    }
+}
+
+fn left_assoc<'a, C, OP, S: AsStr>(
+    mut child: impl FnMut(&'a [Token<S>]) -> IResult<&'a [Token<S>], C>,
+    mut op: impl FnMut(&'a [Token<S>]) -> IResult<&'a [Token<S>], OP>,
+    merge: impl Fn(OP, C, C) -> C,
+    i: &'a [Token<S>],
+) -> IResult<&'a [Token<S>], C> {
     let (i, mut expr) = child(i)?;
     let (i, exprs) = many0(move |i| {
-        let (i, _) = sp(i)?;
         let (i, op) = op(i)?;
-        let (i, _) = sp(i)?;
         let (i, right) = child(i)?;
         Ok((i, (op, right)))
     })(i)?;
@@ -991,14 +896,13 @@ fn left_assoc<'a, C>(
     Ok((i, expr))
 }
 
-fn comma_separated_list0<'a, F, O>(f: F) -> impl FnMut(&'a str) -> IResult<&'a str, Vec<O>>
+fn comma_separated_list0<'a, F, O, S: AsStr + 'a>(
+    f: F,
+) -> impl FnMut(&'a [Token<S>]) -> IResult<&'a [Token<S>], Vec<O>>
 where
-    F: Fn(&'a str) -> IResult<&'a str, O>,
+    F: Fn(&'a [Token<S>]) -> IResult<&'a [Token<S>], O>,
 {
-    terminated(
-        separated_list0(preceded(sp, char(',')), preceded(sp, f)),
-        opt(preceded(sp, char(','))),
-    )
+    terminated(separated_list0(op(","), f), opt(op(",")))
 }
 
 fn op_call(name: &str, args: Vec<Expression>) -> Expression {
@@ -1071,7 +975,7 @@ fn main(): breaking
 "#,
     ];
     for input in &inputs {
-        let result = program(input);
+        let result = parse(input);
         gilder::assert_golden!(format!("{:?}", result));
     }
 }

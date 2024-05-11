@@ -1,11 +1,13 @@
 use crate::string::Str;
 
+use super::lexer::Token;
+
 #[derive(Debug, Clone)]
 pub enum Macro {
     Rules(MacroRules),
     NativeFn {
         name: Str,
-        fun: fn(TokenItem) -> String,
+        fun: fn(TokenItem) -> Vec<Token<Str>>,
     },
 }
 
@@ -30,9 +32,7 @@ pub struct Pattern {
 #[derive(Debug, Clone)]
 pub enum PatternItem {
     Any,
-    Op(String),
-    Ident(Str),
-    Literal(Str),
+    Token(Token<Str>),
     Paren {
         paren_type: char,
         appends: Vec<PatternSeqAppend>,
@@ -56,11 +56,15 @@ pub enum RepeatType {
 }
 
 #[derive(Debug, Clone)]
+pub struct MacroCall {
+    pub name: Str,
+    pub arg: TokenItem,
+}
+
+#[derive(Debug, Clone)]
 pub enum TokenItem {
     Variable(Str),
-    Op(String),
-    Ident(Str),
-    Literal(Str),
+    Token(Token<Str>),
     Paren(char, Vec<TokenSeqAppend>),
 }
 
@@ -124,7 +128,7 @@ impl Macro {
         }
     }
 
-    pub fn expand(&self, token: &TokenItem) -> Option<String> {
+    pub fn expand<'a>(&self, token: &TokenItem) -> Option<Vec<Token<Str>>> {
         match self {
             Macro::Rules(rules) => rules.expand(token),
             Macro::NativeFn { fun, .. } => Some(fun(token.clone())),
@@ -133,13 +137,13 @@ impl Macro {
 }
 
 impl MacroRules {
-    pub fn expand(&self, token: &TokenItem) -> Option<String> {
+    pub fn expand<'a>(&self, token: &TokenItem) -> Option<Vec<Token<Str>>> {
         for rule in &self.rules {
             let mut bindings = vec![];
             if macro_pattern_match(&mut bindings, &rule.pattern, token) {
-                let mut string = String::new();
-                rule.template.render(&bindings, &mut vec![], &mut string);
-                return Some(string);
+                let mut tokens = Vec::new();
+                rule.template.render(&bindings, &mut vec![], &mut tokens);
+                return Some(tokens);
             }
         }
         None
@@ -157,9 +161,7 @@ pub fn macro_pattern_match(
 
     match (&pattern.item, token) {
         (PatternItem::Any, _) => true,
-        (PatternItem::Op(op), TokenItem::Op(op2)) => op == op2,
-        (PatternItem::Ident(id), TokenItem::Ident(id2)) => id == id2,
-        (PatternItem::Literal(lit), TokenItem::Literal(lit2)) => lit == lit2,
+        (PatternItem::Token(t1), TokenItem::Token(t2)) => t1 == t2,
         (
             PatternItem::Paren {
                 paren_type,
@@ -246,11 +248,11 @@ pub fn macro_pattern_match(
 }
 
 impl TokenItem {
-    pub fn render(
+    pub fn render<'a>(
         &self,
         bindings: &[(Str, CapturedToken)],
         indexes: &mut Vec<usize>,
-        string: &mut String,
+        rendered: &mut Vec<Token<Str>>,
     ) -> bool {
         match self {
             TokenItem::Variable(var) => {
@@ -259,32 +261,30 @@ impl TokenItem {
                     .find(|(v, _)| v == var)
                     .and_then(|(_, ct)| ct.get(indexes))
                 {
-                    string.push_str(&format!("{}", token));
+                    token.render(bindings, indexes, rendered); // TODO:?
                 } else {
                     // dbg!(bindings, indexes, var);
                     return false;
                 }
             }
-            TokenItem::Op(op) => string.push_str(op),
-            TokenItem::Ident(id) => string.push_str(id),
-            TokenItem::Literal(lit) => string.push_str(&format!("{}", lit)),
+            TokenItem::Token(token) => rendered.push(token.clone()),
             TokenItem::Paren(paren_type, tokens) => {
-                string.push(*paren_type);
+                rendered.push(Token::Paren(*paren_type));
 
                 for ta in tokens {
                     match ta {
                         TokenSeqAppend::Token(t) => {
-                            if !t.render(bindings, indexes, string) {
+                            if !t.render(bindings, indexes, rendered) {
                                 return false;
                             }
                         }
                         TokenSeqAppend::Repeat(ts) => {
                             indexes.push(0);
                             'outer: loop {
-                                let string_len = string.len();
+                                let string_len = rendered.len();
                                 for t in ts.iter() {
-                                    if !t.render(bindings, indexes, string) {
-                                        string.truncate(string_len);
+                                    if !t.render(bindings, indexes, rendered) {
+                                        rendered.truncate(string_len);
                                         break 'outer;
                                     }
                                 }
@@ -295,15 +295,14 @@ impl TokenItem {
                     }
                 }
 
-                string.push(match paren_type {
+                rendered.push(Token::Paren(match paren_type {
                     '(' => ')',
                     '[' => ']',
                     '{' => '}',
                     _ => unreachable!(),
-                });
+                }));
             }
         }
-        string.push_str(" ");
         true
     }
 }
@@ -312,9 +311,15 @@ impl std::fmt::Display for TokenItem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TokenItem::Variable(_) => panic!(),
-            TokenItem::Op(op) => write!(f, "{}", op),
-            TokenItem::Ident(ident) => write!(f, "{}", ident),
-            TokenItem::Literal(lit) => write!(f, "{}", lit),
+            TokenItem::Token(token) => match token {
+                Token::Keyword(s) => write!(f, "{}", s),
+                Token::Identifier(s) => write!(f, "{}", s),
+                Token::Operator(s) => write!(f, "{}", s),
+                Token::Paren(s) => write!(f, "{}", s),
+                Token::String(s) => write!(f, "{}", s),
+                Token::Int(c) => write!(f, "{}", c),
+                Token::Float(c) => write!(f, "{}", c),
+            },
             TokenItem::Paren(paren_type, tokens) => {
                 write!(f, "{}", paren_type)?;
                 for t in tokens {
@@ -339,67 +344,48 @@ impl std::fmt::Display for TokenItem {
 }
 
 pub mod parser {
-    use std::sync::Arc;
 
-    use crate::{
-        parser::{identifier, literal, sp},
-        string::intern,
+    use crate::parser::{
+        identifier, keyword,
+        lexer::{AsStr, Token},
+        op,
     };
     use nom::{
         branch::alt,
-        bytes::complete::tag,
-        character::complete::{alpha1, alphanumeric1, char, one_of},
-        combinator::{cut, map, not, recognize, value},
-        multi::{many0, many0_count},
-        sequence::{pair, preceded},
+        combinator::{cut, fail, map, value},
+        multi::many0,
         IResult,
     };
 
     use super::*;
 
-    pub fn macro_def(i: &str) -> IResult<&str, MacroRules> {
-        let (i, _) = tag("macro")(i)?;
-        let (i, _) = sp(i)?;
-        let (i, _) = tag("!")(i)?;
-        let (i, _) = sp(i)?;
+    pub fn macro_def<'a, S: AsStr>(i: &'a [Token<S>]) -> IResult<&'a [Token<S>], Macro> {
+        let (i, _) = keyword("macro")(i)?;
+        let (i, _) = op("!")(i)?;
         cut(|i| {
             let (i, name) = identifier(i)?;
-            let (i, _) = sp(i)?;
-            let (i, _) = tag("{")(i)?;
-            let (i, _) = sp(i)?;
-            let (i, rules) = many0(preceded(sp, macro_rule))(i)?;
-            let (i, _) = sp(i)?;
-            let (i, _) = tag("}")(i)?;
-            Ok((
-                i,
-                MacroRules {
-                    name: intern(name),
-                    rules,
-                },
-            ))
+            let (i, _) = paren('{')(i)?;
+            let (i, rules) = many0(macro_rule)(i)?;
+            let (i, _) = paren('}')(i)?;
+            Ok((i, Macro::Rules(MacroRules { name, rules })))
         })(i)
     }
 
-    pub fn macro_call(i: &str) -> IResult<&str, (Str, TokenItem)> {
+    pub fn macro_call<'a, S: AsStr>(i: &'a [Token<S>]) -> IResult<&'a [Token<S>], MacroCall> {
         let (i, name) = identifier(i)?;
-        let (i, _) = sp(i)?;
-        let (i, _) = tag("!")(i)?;
-        let (i, _) = not(char('='))(i)?;
-        let (i, _) = sp(i)?;
+        let (i, _) = op("!")(i)?;
         let (i, token) = token_item(i)?;
-        Ok((i, (intern(name), token)))
+        Ok((i, MacroCall { name, arg: token }))
     }
 
-    fn macro_rule(i: &str) -> IResult<&str, MacroRule> {
+    fn macro_rule<'a, S: AsStr>(i: &'a [Token<S>]) -> IResult<&'a [Token<S>], MacroRule> {
         let (i, pattern) = macro_pattern(i)?;
-        let (i, _) = sp(i)?;
-        let (i, _) = tag("=>")(i)?;
-        let (i, _) = sp(i)?;
+        let (i, _) = op("=>")(i)?;
         let (i, template) = token_item(i)?;
         Ok((i, MacroRule { pattern, template }))
     }
 
-    fn macro_pattern(i: &str) -> IResult<&str, Pattern> {
+    fn macro_pattern<'a, S: AsStr>(i: &'a [Token<S>]) -> IResult<&'a [Token<S>], Pattern> {
         alt((
             // |i| {
             //     let (i, _) = tag("$")(i)?;
@@ -418,13 +404,12 @@ pub mod parser {
             //     ))
             // },
             |i| {
-                let (i, _) = tag("$")(i)?;
-                let (i, _) = sp(i)?;
+                let (i, _) = op("$")(i)?;
                 let (i, variable) = identifier(i)?;
                 Ok((
                     i,
                     Pattern {
-                        variable: Some(intern(variable)),
+                        variable: Some(variable),
                         item: PatternItem::Any,
                     },
                 ))
@@ -436,16 +421,15 @@ pub mod parser {
         ))(i)
     }
 
-    fn macro_pattern_item(i: &str) -> IResult<&str, PatternItem> {
+    fn macro_pattern_item<'a, S: AsStr>(i: &'a [Token<S>]) -> IResult<&'a [Token<S>], PatternItem> {
         alt((
             |i| {
-                let (i, paren_type) = one_of("([{")(i)?;
-                let (i, appends) = many0(preceded(sp, macro_pattern_seq_append))(i)?;
-                let (i, _) = sp(i)?;
-                let (i, _) = tag(match paren_type {
-                    '(' => ")",
-                    '[' => "]",
-                    '{' => "}",
+                let (i, paren_type) = alt((paren('('), paren('['), paren('{')))(i)?;
+                let (i, appends) = many0(macro_pattern_seq_append)(i)?;
+                let (i, _) = paren(match paren_type {
+                    '(' => ')',
+                    '[' => ']',
+                    '{' => '}',
                     _ => unreachable!(),
                 })(i)?;
                 Ok((
@@ -456,114 +440,130 @@ pub mod parser {
                     },
                 ))
             },
-            map(op, |op| PatternItem::Op(op.to_string())),
-            map(recognize(literal), |value| {
-                PatternItem::Literal(Arc::new(value.to_string()))
-            }),
-            map(identifier, |ident| PatternItem::Ident(intern(ident))),
+            map(any_op, |op| PatternItem::Token(op)),
+            |i: &'a [Token<S>]| {
+                if let Some(t) = i.first() {
+                    match t {
+                        Token::Keyword(_)
+                        | Token::Identifier(_)
+                        | Token::String(_)
+                        | Token::Int(_)
+                        | Token::Float(_) => Ok((&i[1..], PatternItem::Token(t.interned()))),
+                        Token::Operator(_) | Token::Paren(_) => fail(i),
+                    }
+                } else {
+                    fail(i)
+                }
+            },
         ))(i)
     }
 
-    fn macro_pattern_seq_append(i: &str) -> IResult<&str, PatternSeqAppend> {
+    fn macro_pattern_seq_append<'a, S: AsStr>(
+        i: &'a [Token<S>],
+    ) -> IResult<&'a [Token<S>], PatternSeqAppend> {
         alt((
             |i| {
-                let (i, _) = tag("$")(i)?;
-                let (i, _) = sp(i)?;
-                let (i, _) = tag("(")(i)?;
-                let (i, seq) = many0(preceded(sp, macro_pattern))(i)?;
-                let (i, _) = sp(i)?;
-                let (i, _) = tag(")")(i)?;
-                let (i, _) = sp(i)?;
+                let (i, _) = op("$")(i)?;
+                let (i, _) = paren('(')(i)?;
+                let (i, seq) = many0(macro_pattern)(i)?;
+                let (i, _) = paren(')')(i)?;
                 let (i, type_) = alt((
-                    value(RepeatType::ZeroOrMore, tag("*")),
-                    value(RepeatType::OneOrMore, tag("+")),
-                    value(RepeatType::ZeroOrOne, tag("?")),
+                    value(RepeatType::ZeroOrMore, op("*")),
+                    value(RepeatType::OneOrMore, op("+")),
+                    value(RepeatType::ZeroOrOne, op("?")),
                 ))(i)?;
-                let (i, _) = sp(i)?;
                 Ok((i, PatternSeqAppend::Repeat { type_, seq }))
             },
             map(macro_pattern, PatternSeqAppend::Pattern),
         ))(i)
     }
 
-    fn op(i: &str) -> IResult<&str, &str> {
-        alt((
+    fn any_op<'a, S: AsStr>(i: &'a [Token<S>]) -> IResult<&'a [Token<S>], Token<Str>> {
+        map(
             alt((
-                tag("=="),
-                tag("!="),
-                tag(">="),
-                tag("<="),
-                tag("||"),
-                tag("&&"),
-                tag(".."),
-                tag("=>"),
+                alt((
+                    op("=="),
+                    op("!="),
+                    op(">="),
+                    op("<="),
+                    op("||"),
+                    op("&&"),
+                    op(".."),
+                    op("=>"),
+                )),
+                alt((
+                    op("="),
+                    op("+"),
+                    op("-"),
+                    op("*"),
+                    op("/"),
+                    op("%"),
+                    op("!"),
+                    op(">"),
+                    op("<"),
+                    op("."),
+                    op(","),
+                    op(":"),
+                    op(";"),
+                    op("|"),
+                    op("'"),
+                )),
             )),
-            alt((
-                tag("="),
-                tag("+"),
-                tag("-"),
-                tag("*"),
-                tag("/"),
-                tag("%"),
-                tag("!"),
-                tag(">"),
-                tag("<"),
-                tag("."),
-                tag(","),
-                tag(":"),
-                tag(";"),
-                tag("|"),
-                tag("'"),
-                tag("_"),
-            )),
-        ))(i)
+            |s: &S| Token::Operator(s.interned()),
+        )(i)
     }
 
-    fn token_item(i: &str) -> IResult<&str, TokenItem> {
+    fn token_item<'a, S: AsStr>(i: &'a [Token<S>]) -> IResult<&'a [Token<S>], TokenItem> {
         alt((
             |i| {
-                let (i, paren_type) = one_of("([{")(i)?;
-                let (i, appends) = many0(preceded(
-                    sp,
-                    alt((map(token_item, TokenSeqAppend::Token), |i| {
-                        let (i, _) = tag("$")(i)?;
-                        let (i, _) = sp(i)?;
-                        let (i, _) = tag("(")(i)?;
-                        let (i, tokens) = many0(preceded(sp, token_item))(i)?;
-                        let (i, _) = sp(i)?;
-                        let (i, _) = tag(")")(i)?;
-                        Ok((i, TokenSeqAppend::Repeat(tokens)))
-                    })),
-                ))(i)?;
-                let (i, _) = sp(i)?;
-                let (i, _) = tag(match paren_type {
-                    '(' => ")",
-                    '[' => "]",
-                    '{' => "}",
+                let (i, paren_type) = alt((paren('('), paren('['), paren('{')))(i)?;
+                let (i, appends) = many0(alt((map(token_item, TokenSeqAppend::Token), |i| {
+                    let (i, _) = op("$")(i)?;
+                    let (i, _) = paren('(')(i)?;
+                    let (i, tokens) = many0(token_item)(i)?;
+                    let (i, _) = paren(')')(i)?;
+                    Ok((i, TokenSeqAppend::Repeat(tokens)))
+                })))(i)?;
+                let (i, _) = paren(match paren_type {
+                    '(' => ')',
+                    '[' => ']',
+                    '{' => '}',
                     _ => unreachable!(),
                 })(i)?;
                 Ok((i, TokenItem::Paren(paren_type, appends)))
             },
-            map(recognize(literal), |value| {
-                TokenItem::Literal(Arc::new(value.to_string()))
-            }),
-            map(ident, TokenItem::Ident),
             |i| {
-                let (i, _) = tag("$")(i)?;
-                let (i, _) = sp(i)?;
+                let (i, _) = op("$")(i)?;
                 let (i, var) = identifier(i)?;
-                Ok((i, TokenItem::Variable(intern(var))))
+                Ok((i, TokenItem::Variable(var)))
             },
-            map(op, |op| TokenItem::Op(op.to_string())),
+            map(any_op, |op| TokenItem::Token(op)),
+            |i: &'a [Token<S>]| {
+                if let Some(t) = i.first() {
+                    match t {
+                        Token::Keyword(_)
+                        | Token::Identifier(_)
+                        | Token::String(_)
+                        | Token::Int(_)
+                        | Token::Float(_) => Ok((&i[1..], TokenItem::Token(t.interned()))),
+                        Token::Operator(_) | Token::Paren(_) => fail(i),
+                    }
+                } else {
+                    fail(i)
+                }
+            },
         ))(i)
     }
 
-    fn ident(i: &str) -> IResult<&str, Str> {
-        let (i, str) = recognize(pair(
-            alt((alpha1, tag("_"))),
-            many0_count(alt((alphanumeric1, tag("_")))),
-        ))(i)?;
-        Ok((i, Arc::new(str.to_string())))
+    fn paren<S: AsStr>(name: char) -> impl FnMut(&[Token<S>]) -> IResult<&[Token<S>], char> {
+        move |i| {
+            if let Some(Token::Paren(c)) = i.first() {
+                if *c == name {
+                    return Ok((&i[1..], name));
+                }
+            }
+            fail(i)
+        }
     }
 }
 
@@ -571,9 +571,9 @@ pub fn builtin() -> Vec<Macro> {
     vec![Macro::NativeFn {
         name: crate::string::intern("stringify"),
         fun: |token| {
-            let mut string = String::new();
-            token.render(&[], &mut vec![], &mut string);
-            format!("{:?}", string)
+            let mut tokens = Vec::new();
+            token.render(&[], &mut vec![], &mut tokens);
+            tokens
         },
     }]
 }
