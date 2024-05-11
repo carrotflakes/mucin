@@ -41,7 +41,7 @@ macro_rules! destruct_value_2 {
         }
     };
     ($value:expr, (bool $pat:tt), $body:block) => {
-        if let $crate::value::Value::Boolean($pat) = $value {
+        if let $crate::value::Value::Bool($pat) = $value {
             $body
         }
     };
@@ -79,7 +79,7 @@ macro_rules! destruct_value_2 {
     };
     ($value:expr, (vec [$($pat:tt),* $(,)?]), $body:block) => {
         if let $crate::value::Value::Vec(ref vec) = $value {
-            let vec = vec.borrow();
+            let vec = $crate::gc_arena::lock::RefLock::borrow(vec);
             let mut it = vec.iter();
             $crate::destruct_value_1! {
                 [$((it.next(), (Some($pat))),)*],
@@ -94,9 +94,9 @@ macro_rules! destruct_value_2 {
     };
     ($value:expr, (dict {$($k:tt : $v:tt),* $(,)?}), $body:block) => {
         if let $crate::value::Value::Dict(ref dict) = $value {
-            let dict = dict.borrow();
+            let d = $crate::gc_arena::lock::RefLock::borrow(dict);
             $crate::destruct_value_1! {
-                [$((dict.get_by_str(stringify!($k)), (Some($v))),)*],
+                [$((d.get_by_str(stringify!($k)), (Some($v))),)*],
                 $body
             }
         }
@@ -137,6 +137,8 @@ fn test_destruct_value() {
         let value = Value::Int(42);
         destruct_value! {
             &value,
+            (bool _b) => {
+            },
             (int n) => {
                 assert_eq!(*n, 42);
             },
