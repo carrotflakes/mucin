@@ -816,7 +816,7 @@ fn tuple<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
     Ok((i, Expression::Tuple { exprs }))
 }
 
-pub fn literal<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Literal> {
+fn literal<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Literal> {
     match i.first() {
         Some(Token::String(s)) => Ok((&i[1..], Literal::String(s.clone()))),
         Some(Token::Int(v)) => Ok((&i[1..], Literal::Int(*v))),
@@ -839,7 +839,7 @@ fn label<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Str> {
     Ok((i, s))
 }
 
-pub fn identifier<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Str> {
+fn identifier<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Str> {
     if let Some(Token::Identifier(ident)) = i.first() {
         return Ok((&i[1..], ident.interned()));
     }
