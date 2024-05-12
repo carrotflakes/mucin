@@ -312,11 +312,18 @@ impl<'gc> Builder<'gc> {
                         self.instructions.push(Instruction::Dup);
                         self.stack_size += 1;
                         self.build_expression(field)?;
-                        self.instructions.push(Instruction::Dup);
-                        let index = self.add_var(intern(""), false);
-                        self.instructions.push(Instruction::Store(index.0, index.1));
-                        self.instructions.push(Instruction::CallNative(&NF_INDEX));
-                        self.stack_size -= 1;
+                        if let model::Expression::Literal { value: _ } = field {
+                            self.instructions.push(Instruction::CallNative(&NF_INDEX));
+                            self.stack_size -= 1;
+                            self.build_expression(field)?;
+                        } else {
+                            self.instructions.push(Instruction::Dup);
+                            let index = self.add_var(intern(""), false);
+                            self.instructions.push(Instruction::Store(index.0, index.1));
+                            self.instructions.push(Instruction::CallNative(&NF_INDEX));
+                            self.instructions.push(Instruction::Load(index.0, index.1));
+                        }
+                        self.instructions.push(Instruction::Swap);
 
                         self.build_expression(expr)?;
                         match op.as_str() {
@@ -327,9 +334,7 @@ impl<'gc> Builder<'gc> {
                             "__rem" => self.instructions.push(Instruction::Rem),
                             _ => unreachable!(),
                         }
-
-                        self.instructions.push(Instruction::Load(index.0, index.1));
-                        self.instructions.push(Instruction::Swap);
+                        self.stack_size -= 1;
                     } else {
                         self.build_expression(field)?;
                         self.build_expression(expr)?;
