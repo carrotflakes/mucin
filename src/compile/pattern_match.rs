@@ -1,5 +1,5 @@
 use crate::{
-    model::*,
+    ast::*,
     native_fns::{NF_STRUCT_TYPE, NF_TYPEOF},
     string::{intern, unique_str},
 };

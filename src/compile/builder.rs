@@ -28,7 +28,7 @@ pub struct Builder<'gc> {
     labels: Vec<Label>,
     break_indexes: Vec<(Str, usize)>,
     instructions_offset: usize,
-    defered: Vec<(model::Expression, usize)>,
+    defered: Vec<(ast::Expression, usize)>,
     env_truncate: usize,
 }
 
@@ -92,26 +92,26 @@ impl<'gc> Builder<'gc> {
 
     pub fn build_program(
         &mut self,
-        definitions: &[model::Definition],
+        definitions: &[ast::Definition],
     ) -> std::result::Result<Vec<(Str, bool)>, String> {
         let mut names = Vec::new();
         for definition in definitions {
             match definition {
-                model::Definition::Function(function) => {
+                ast::Definition::Function(function) => {
                     names.push((function.name.clone(), true));
                 }
-                model::Definition::Method { .. } => {}
-                model::Definition::Variable {
+                ast::Definition::Method { .. } => {}
+                ast::Definition::Variable {
                     name,
                     mutable,
                     expr: _,
                 } => {
                     names.push((name.clone(), *mutable));
                 }
-                model::Definition::Struct { name, fields: _ } => {
+                ast::Definition::Struct { name, fields: _ } => {
                     names.push((name.clone(), false));
                 }
-                model::Definition::Module(mod_name) => {
+                ast::Definition::Module(mod_name) => {
                     names.push((mod_name.clone(), false));
                 }
             }
@@ -120,7 +120,7 @@ impl<'gc> Builder<'gc> {
 
         for definition in definitions {
             match definition {
-                model::Definition::Function(function) => {
+                ast::Definition::Function(function) => {
                     let f = Gc::new(self.mc, self.build_function(function)?);
                     let index = self.resolve_variable(&function.name).unwrap();
                     self.instructions.extend([
@@ -128,7 +128,7 @@ impl<'gc> Builder<'gc> {
                         Instruction::Store(index.0 as u16, index.1 as u16),
                     ]);
                 }
-                model::Definition::Method { receiver, function } => {
+                ast::Definition::Method { receiver, function } => {
                     let f = Gc::new(self.mc, self.build_function(function)?);
                     self.build_expression(receiver).unwrap();
                     self.instructions
@@ -142,7 +142,7 @@ impl<'gc> Builder<'gc> {
                         .push(Instruction::CallNative(&NF_FIELD_ASSIGN));
                     self.instructions.push(Instruction::Pop);
                 }
-                model::Definition::Variable {
+                ast::Definition::Variable {
                     name,
                     mutable: _,
                     expr,
@@ -161,7 +161,7 @@ impl<'gc> Builder<'gc> {
                     self.instructions
                         .push(Instruction::Store(index.0 as u16, index.1 as u16));
                 }
-                model::Definition::Struct { name, fields } => {
+                ast::Definition::Struct { name, fields } => {
                     let index = self.resolve_variable(name).unwrap();
                     self.instructions.extend([
                         Instruction::Push(Box::new(Value::StructType(Gc::new(
@@ -175,7 +175,7 @@ impl<'gc> Builder<'gc> {
                         Instruction::Store(index.0 as u16, index.1 as u16),
                     ]);
                 }
-                model::Definition::Module(name) => {
+                ast::Definition::Module(name) => {
                     let index = self.resolve_variable(name).unwrap();
                     self.instructions.extend([
                         Instruction::Push(Box::new(Value::Unit)),
@@ -193,7 +193,7 @@ impl<'gc> Builder<'gc> {
     #[must_use]
     pub fn build_function(
         &mut self,
-        function: &model::Function,
+        function: &ast::Function,
     ) -> std::result::Result<Function<'gc>, String> {
         let variables = super::function_env::FunctionEnv::from_function(function);
 
@@ -263,12 +263,12 @@ impl<'gc> Builder<'gc> {
     }
 
     #[must_use]
-    fn build_block(&mut self, block: &model::Block) -> Result<()> {
+    fn build_block(&mut self, block: &ast::Block) -> Result<()> {
         let ss = self.stack_size;
 
         for statement in &block.statements {
             match statement {
-                model::Statement::Let {
+                ast::Statement::Let {
                     name,
                     mutable,
                     expr,
@@ -280,12 +280,12 @@ impl<'gc> Builder<'gc> {
                         .push(Instruction::Store(index.0 as u16, index.1 as u16));
                     self.stack_size -= 1;
                 }
-                model::Statement::Expression { expr } => {
+                ast::Statement::Expression { expr } => {
                     self.build_expression(expr)?;
                     self.instructions.push(Instruction::Pop);
                     self.stack_size -= 1;
                 }
-                model::Statement::Assign { name, expr, op } => {
+                ast::Statement::Assign { name, expr, op } => {
                     let index = self.resolve_variable(name).unwrap();
                     if !index.2 {
                         return Err(Error::String(format!("variable is not mutable: {}", name)));
@@ -314,7 +314,7 @@ impl<'gc> Builder<'gc> {
                         .push(Instruction::Store(index.0 as u16, index.1 as u16));
                     self.stack_size -= 1;
                 }
-                model::Statement::FieldAssign {
+                ast::Statement::FieldAssign {
                     dict,
                     field,
                     expr,
@@ -327,7 +327,7 @@ impl<'gc> Builder<'gc> {
                         self.instructions.push(Instruction::Dup);
                         self.stack_size += 1;
                         self.build_expression(field)?;
-                        if let model::Expression::Literal { value: _ } = field {
+                        if let ast::Expression::Literal { value: _ } = field {
                             self.instructions.push(Instruction::CallNative(&NF_INDEX));
                             self.stack_size -= 1;
                             self.build_expression(field)?;
@@ -360,7 +360,7 @@ impl<'gc> Builder<'gc> {
                     self.instructions.push(Instruction::Pop);
                     self.stack_size -= 3;
                 }
-                model::Statement::Defer { expr } => {
+                ast::Statement::Defer { expr } => {
                     self.defered
                         .push((expr.clone(), self.envs.last().unwrap().len()));
                 }
@@ -379,9 +379,9 @@ impl<'gc> Builder<'gc> {
     }
 
     #[must_use]
-    fn build_expression(&mut self, expression: &model::Expression) -> Result<()> {
+    fn build_expression(&mut self, expression: &ast::Expression) -> Result<()> {
         match expression {
-            model::Expression::Op { name, args } => {
+            ast::Expression::Op { name, args } => {
                 if let Some((inst, arity, flip)) = match name.as_str() {
                     "__add" => Some((Instruction::Add, 2, false)),
                     "__sub" => Some((Instruction::Sub, 2, false)),
@@ -454,9 +454,9 @@ impl<'gc> Builder<'gc> {
 
                 unreachable!("unknown operator: {}", name);
             }
-            model::Expression::Call { callee, args } => {
+            ast::Expression::Call { callee, args } => {
                 let ss = self.stack_size;
-                if let model::Expression::Op { name, args: args2 } = callee.as_ref() {
+                if let ast::Expression::Op { name, args: args2 } = callee.as_ref() {
                     if name.as_str() == "__index" {
                         if let Some(method_call_fn) = self.method_call_fn.clone() {
                             self.build_vec(args)?;
@@ -475,7 +475,7 @@ impl<'gc> Builder<'gc> {
                 if let Some(args) = args
                     .iter()
                     .map(|arg| {
-                        if let model::VecAppend::Element(e) = arg {
+                        if let ast::VecAppend::Element(e) = arg {
                             Some(e)
                         } else {
                             None
@@ -498,21 +498,21 @@ impl<'gc> Builder<'gc> {
                 }
                 assert_eq!(ss + 1, self.stack_size);
             }
-            model::Expression::Literal { value } => {
+            ast::Expression::Literal { value } => {
                 self.instructions
                     .push(Instruction::Push(Box::new(build_value(value))));
                 self.stack_size += 1;
             }
-            model::Expression::Vec { appends } => {
+            ast::Expression::Vec { appends } => {
                 self.build_vec(appends)?;
             }
-            model::Expression::Dict { appends } => {
+            ast::Expression::Dict { appends } => {
                 self.build_dict_appends(appends)?;
                 self.instructions.push(Instruction::MakeDict(appends.len()));
                 self.stack_size += 1;
                 self.stack_size -= appends.len();
             }
-            model::Expression::Struct {
+            ast::Expression::Struct {
                 constructor,
                 appends,
             } => {
@@ -522,7 +522,7 @@ impl<'gc> Builder<'gc> {
                     .push(Instruction::MakeStruct(appends.len()));
                 self.stack_size -= appends.len();
             }
-            model::Expression::Variable { name } => match self.resolve_variable(name) {
+            ast::Expression::Variable { name } => match self.resolve_variable(name) {
                 Some((i1, i2, _)) => {
                     self.instructions
                         .push(Instruction::Load(i1 as u16, i2 as u16));
@@ -530,15 +530,15 @@ impl<'gc> Builder<'gc> {
                 }
                 None => return Err(Error::String(format!("variable not found: {}", name))),
             },
-            model::Expression::If {
+            ast::Expression::If {
                 condition,
                 then,
                 else_,
             } => {
                 let ss = self.stack_size;
 
-                let else_body = model::Expression::Literal {
-                    value: model::Literal::Unit,
+                let else_body = ast::Expression::Literal {
+                    value: ast::Literal::Unit,
                 };
                 let else_ = else_.as_deref().unwrap_or(&else_body);
 
@@ -606,13 +606,13 @@ impl<'gc> Builder<'gc> {
 
                 assert_eq!(ss + 1, self.stack_size);
             }
-            model::Expression::Loop { body } => {
+            ast::Expression::Loop { body } => {
                 assert!(!self.labels.is_empty(), "loop outside of labeled");
 
                 self.build_expression(body)?;
-                self.build_expression(&model::Expression::Continue { label: intern("") })?;
+                self.build_expression(&ast::Expression::Continue { label: intern("") })?;
             }
-            model::Expression::Labeled { label, body } => {
+            ast::Expression::Labeled { label, body } => {
                 let ss = self.stack_size;
                 let continue_index = self.instructions_offset + self.instructions.len();
                 self.labels.push(Label {
@@ -648,12 +648,12 @@ impl<'gc> Builder<'gc> {
                 self.stack_size = ss + 1;
                 self.envs.last_mut().unwrap()[env_len..].fill_with(|| (intern(""), false));
             }
-            model::Expression::Match { expr, arms } => {
+            ast::Expression::Match { expr, arms } => {
                 let expr = convert_match(expr.as_ref().clone(), arms.clone());
                 // dbg!(&expr);
                 self.build_expression(&expr)?;
             }
-            model::Expression::Block(block) => {
+            ast::Expression::Block(block) => {
                 let env_len = self.envs.last().unwrap().len();
                 let defered_len = self.defered.len();
 
@@ -670,7 +670,7 @@ impl<'gc> Builder<'gc> {
 
                 return res;
             }
-            model::Expression::Return { expr } => {
+            ast::Expression::Return { expr } => {
                 if self.stack_size > 0 {
                     self.instructions
                         .push(Instruction::Rewind(self.stack_size, false));
@@ -689,7 +689,7 @@ impl<'gc> Builder<'gc> {
                 self.instructions.push(Instruction::Return);
                 return Err(Error::Return);
             }
-            model::Expression::Break { label, expr } => {
+            ast::Expression::Break { label, expr } => {
                 let Some(label) = self.get_label(label) else {
                     return Err(Error::String("break outside of labeled".to_owned()));
                 };
@@ -714,7 +714,7 @@ impl<'gc> Builder<'gc> {
                 self.instructions.push(Instruction::Jump(0));
                 return Err(Error::Break);
             }
-            model::Expression::Continue { label } => {
+            ast::Expression::Continue { label } => {
                 let Some(label) = self.get_label(label) else {
                     return Err(Error::String("continue outside of labeled".to_owned()));
                 };
@@ -729,13 +729,13 @@ impl<'gc> Builder<'gc> {
                     .push(Instruction::Jump(label.continue_index));
                 return Err(Error::Break);
             }
-            model::Expression::Closure(function) => {
+            ast::Expression::Closure(function) => {
                 let function = self.build_function(function).map_err(Error::String)?;
                 self.instructions
                     .push(Instruction::MakeClosure(Gc::new(self.mc, function)));
                 self.stack_size += 1;
             }
-            model::Expression::StaticNativeFn { native_fn } => {
+            ast::Expression::StaticNativeFn { native_fn } => {
                 self.instructions
                     .push(Instruction::Push(Box::new(Value::NativeFn(native_fn))));
                 self.stack_size += 1;
@@ -745,10 +745,10 @@ impl<'gc> Builder<'gc> {
     }
 
     #[must_use]
-    fn build_dict_appends(&mut self, appends: &Vec<model::DictAppend>) -> Result<()> {
+    fn build_dict_appends(&mut self, appends: &Vec<ast::DictAppend>) -> Result<()> {
         Ok(for append in appends {
             match append {
-                model::DictAppend::Field(name, expr) => {
+                ast::DictAppend::Field(name, expr) => {
                     self.instructions
                         .push(Instruction::Push(Box::new(Value::String(name.clone()))));
                     self.stack_size += 1;
@@ -756,7 +756,7 @@ impl<'gc> Builder<'gc> {
                     self.instructions.push(Instruction::MakePair);
                     self.stack_size -= 1;
                 }
-                model::DictAppend::Spread(expr) => {
+                ast::DictAppend::Spread(expr) => {
                     self.build_expression(expr)?;
                 }
             }
@@ -764,11 +764,11 @@ impl<'gc> Builder<'gc> {
     }
 
     #[must_use]
-    fn build_vec(&mut self, appends: &Vec<model::VecAppend>) -> Result<()> {
+    fn build_vec(&mut self, appends: &Vec<ast::VecAppend>) -> Result<()> {
         if let Some(exprs) = appends
             .iter()
             .map(|append| {
-                if let model::VecAppend::Element(e) = append {
+                if let ast::VecAppend::Element(e) = append {
                     Some(e)
                 } else {
                     None
@@ -791,13 +791,13 @@ impl<'gc> Builder<'gc> {
     }
 
     #[must_use]
-    fn build_vec_appends(&mut self, appends: &[model::VecAppend]) -> Result<()> {
+    fn build_vec_appends(&mut self, appends: &[ast::VecAppend]) -> Result<()> {
         Ok(for append in appends {
             match append {
-                model::VecAppend::Element(ee) => {
+                ast::VecAppend::Element(ee) => {
                     self.build_expression(ee)?;
                 }
-                model::VecAppend::Spread(ve) => {
+                ast::VecAppend::Spread(ve) => {
                     self.build_expression(ve)?;
                     self.instructions.push(Instruction::PushUnit);
                     self.instructions.push(Instruction::MakePair);
@@ -846,13 +846,13 @@ impl<'gc> Builder<'gc> {
     }
 }
 
-fn build_value<'gc>(value: &model::Literal) -> Value<'gc> {
+fn build_value<'gc>(value: &ast::Literal) -> Value<'gc> {
     match value {
-        model::Literal::Unit => Value::Unit,
-        model::Literal::Null => Value::Null,
-        model::Literal::Int(value) => Value::Int(*value),
-        model::Literal::Float(value) => Value::Float(*value),
-        model::Literal::String(value) => Value::String(value.clone()),
-        model::Literal::Bool(value) => Value::Bool(*value),
+        ast::Literal::Unit => Value::Unit,
+        ast::Literal::Null => Value::Null,
+        ast::Literal::Int(value) => Value::Int(*value),
+        ast::Literal::Float(value) => Value::Float(*value),
+        ast::Literal::String(value) => Value::String(value.clone()),
+        ast::Literal::Bool(value) => Value::Bool(*value),
     }
 }

@@ -13,7 +13,7 @@ use nom::{
 };
 
 use crate::{
-    model::{
+    ast::{
         Block, Definition, DictAppend, Expression, Function, Literal, Pattern, Statement, VecAppend,
     },
     string::{intern, Str},

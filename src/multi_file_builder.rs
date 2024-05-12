@@ -15,7 +15,7 @@ pub struct Repository<'gc> {
 
 pub struct File {
     pub path: Arc<String>,
-    pub defines: Vec<crate::model::Definition>,
+    pub defines: Vec<crate::ast::Definition>,
 }
 
 pub struct BuildResult<'gc> {
@@ -42,7 +42,7 @@ impl<'gc> Repository<'gc> {
             let defs = crate::parser::parse(&src).map_err(Error::ParseError)?;
 
             for def in &defs {
-                if let crate::model::Definition::Module(name) = def {
+                if let crate::ast::Definition::Module(name) = def {
                     let path = Arc::new(format!("{}/{}", path, name));
                     if !queue.contains(&path) {
                         queue.push(path.clone());
@@ -97,7 +97,7 @@ impl<'gc> Repository<'gc> {
 
             // Inject modules
             for (i, def) in file.defines.iter().enumerate() {
-                if let crate::model::Definition::Module(name) = def {
+                if let crate::ast::Definition::Module(name) = def {
                     let path = Arc::new(format!("{}/{}", file.path, name));
                     let dict = build_results.get(&path).unwrap().env;
                     env.borrow_mut(self.mc).values[i] = Value::Struct(dict);

@@ -1,4 +1,4 @@
-use crate::{model, string::Str};
+use crate::{ast, string::Str};
 
 pub(super) struct FunctionEnv {
     outer_variables: Vec<Str>,
@@ -6,7 +6,7 @@ pub(super) struct FunctionEnv {
 }
 
 impl FunctionEnv {
-    pub fn from_function(function: &model::Function) -> Vec<Str> {
+    pub fn from_function(function: &ast::Function) -> Vec<Str> {
         let mut env = Self {
             outer_variables: Vec::new(),
             inner_variables: function.args.iter().map(|arg| arg.clone()).collect(),
@@ -26,10 +26,10 @@ impl FunctionEnv {
         self.outer_variables.push(name);
     }
 
-    fn block(&mut self, block: &model::Block) {
+    fn block(&mut self, block: &ast::Block) {
         for statement in &block.statements {
             match statement {
-                model::Statement::Let {
+                ast::Statement::Let {
                     name,
                     mutable: _,
                     expr,
@@ -37,14 +37,14 @@ impl FunctionEnv {
                     self.expression(expr);
                     self.inner_variables.push(name.clone());
                 }
-                model::Statement::Expression { expr } => {
+                ast::Statement::Expression { expr } => {
                     self.expression(expr);
                 }
-                model::Statement::Assign { name, expr, op: _ } => {
+                ast::Statement::Assign { name, expr, op: _ } => {
                     self.add_variable(name.clone());
                     self.expression(expr);
                 }
-                model::Statement::FieldAssign {
+                ast::Statement::FieldAssign {
                     dict,
                     field,
                     expr,
@@ -54,7 +54,7 @@ impl FunctionEnv {
                     self.expression(field);
                     self.expression(expr);
                 }
-                model::Statement::Defer { expr } => self.expression(expr),
+                ast::Statement::Defer { expr } => self.expression(expr),
             }
         }
         if let Some(expr) = &block.expr {
@@ -62,71 +62,71 @@ impl FunctionEnv {
         }
     }
 
-    fn expression(&mut self, expression: &model::Expression) {
+    fn expression(&mut self, expression: &ast::Expression) {
         match expression {
-            model::Expression::Op { name: _, args } => {
+            ast::Expression::Op { name: _, args } => {
                 for arg in args {
                     self.expression(arg);
                 }
             }
-            model::Expression::Call { callee, args } => {
+            ast::Expression::Call { callee, args } => {
                 self.expression(callee);
                 for append in args {
                     match append {
-                        model::VecAppend::Element(expr) => {
+                        ast::VecAppend::Element(expr) => {
                             self.expression(expr);
                         }
-                        model::VecAppend::Spread(expr) => {
+                        ast::VecAppend::Spread(expr) => {
                             self.expression(expr);
                         }
                     }
                 }
             }
-            model::Expression::Literal { value: _ } => {}
-            model::Expression::Vec { appends } => {
+            ast::Expression::Literal { value: _ } => {}
+            ast::Expression::Vec { appends } => {
                 for append in appends {
                     match append {
-                        model::VecAppend::Element(expr) => {
+                        ast::VecAppend::Element(expr) => {
                             self.expression(expr);
                         }
-                        model::VecAppend::Spread(expr) => {
+                        ast::VecAppend::Spread(expr) => {
                             self.expression(expr);
                         }
                     }
                 }
             }
-            model::Expression::Dict { appends } => {
+            ast::Expression::Dict { appends } => {
                 for append in appends {
                     match append {
-                        model::DictAppend::Field(_, expr) => {
+                        ast::DictAppend::Field(_, expr) => {
                             self.expression(expr);
                         }
-                        model::DictAppend::Spread(expr) => {
+                        ast::DictAppend::Spread(expr) => {
                             self.expression(expr);
                         }
                     }
                 }
             }
-            model::Expression::Struct {
+            ast::Expression::Struct {
                 constructor,
                 appends,
             } => {
                 self.expression(constructor);
                 for append in appends {
                     match append {
-                        model::DictAppend::Field(_, expr) => {
+                        ast::DictAppend::Field(_, expr) => {
                             self.expression(expr);
                         }
-                        model::DictAppend::Spread(expr) => {
+                        ast::DictAppend::Spread(expr) => {
                             self.expression(expr);
                         }
                     }
                 }
             }
-            model::Expression::Variable { name } => {
+            ast::Expression::Variable { name } => {
                 self.add_variable(name.clone());
             }
-            model::Expression::If {
+            ast::Expression::If {
                 condition,
                 then,
                 else_,
@@ -140,20 +140,20 @@ impl FunctionEnv {
                     self.inner_variables.truncate(len);
                 }
             }
-            model::Expression::Loop { body } => {
+            ast::Expression::Loop { body } => {
                 self.expression(body);
             }
-            model::Expression::Labeled { label: _, body } => {
+            ast::Expression::Labeled { label: _, body } => {
                 let len = self.inner_variables.len();
                 self.expression(body);
                 self.inner_variables.truncate(len);
             }
-            model::Expression::Block(block) => {
+            ast::Expression::Block(block) => {
                 let len = self.inner_variables.len();
                 self.block(block);
                 self.inner_variables.truncate(len);
             }
-            model::Expression::Match { expr, arms } => {
+            ast::Expression::Match { expr, arms } => {
                 self.expression(expr);
                 let len = self.inner_variables.len();
                 for (pat, expr) in arms {
@@ -162,35 +162,35 @@ impl FunctionEnv {
                     self.inner_variables.truncate(len);
                 }
             }
-            model::Expression::Return { expr } => {
+            ast::Expression::Return { expr } => {
                 if let Some(expr) = expr {
                     self.expression(expr);
                 }
             }
-            model::Expression::Break { label: _, expr } => {
+            ast::Expression::Break { label: _, expr } => {
                 if let Some(expr) = expr {
                     self.expression(expr);
                 }
             }
-            model::Expression::Continue { label: _ } => {}
-            model::Expression::Closure(function) => {
+            ast::Expression::Continue { label: _ } => {}
+            ast::Expression::Closure(function) => {
                 let len = self.inner_variables.len();
                 self.inner_variables.extend(function.args.iter().cloned());
                 self.expression(&function.body);
                 self.inner_variables.truncate(len);
             }
-            model::Expression::StaticNativeFn { native_fn: _ } => {}
+            ast::Expression::StaticNativeFn { native_fn: _ } => {}
         }
     }
 
-    fn pattern(&mut self, pattern: &model::Pattern) {
+    fn pattern(&mut self, pattern: &ast::Pattern) {
         match pattern {
-            model::Pattern::Wildcard => {}
-            model::Pattern::Variable { name, type_: _ } => {
+            ast::Pattern::Wildcard => {}
+            ast::Pattern::Variable { name, type_: _ } => {
                 self.inner_variables.push(name.clone());
             }
-            model::Pattern::Literal(_) => {}
-            model::Pattern::Vec {
+            ast::Pattern::Literal(_) => {}
+            ast::Pattern::Vec {
                 values,
                 allow_tail: _,
             } => {
@@ -198,12 +198,12 @@ impl FunctionEnv {
                     self.pattern(value);
                 }
             }
-            model::Pattern::Dict(fields) => {
+            ast::Pattern::Dict(fields) => {
                 for (_, value) in fields {
                     self.pattern(value);
                 }
             }
-            model::Pattern::Struct {
+            ast::Pattern::Struct {
                 constructor,
                 fields,
             } => {

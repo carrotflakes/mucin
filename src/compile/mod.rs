@@ -3,7 +3,7 @@ mod function_env;
 mod pattern_match;
 
 use crate::{
-    model,
+    ast,
     string::Str,
     value::{StructType, Value},
 };
