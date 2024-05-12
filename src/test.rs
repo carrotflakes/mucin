@@ -309,16 +309,34 @@ fn main() {
     a
 }
 "#,
-// r#"
-// macro! foo {
-//     ($x) => {
-//         let x = $x;
-//         x
-//     }
-// }
+r#"
+macro! foo {
+    $body => {
+        var x = 0;
+        $body;
+        x
+    }
+}
 
-// fn main(): foo!(1)
-// "#,
+fn main() {
+    var x = 1;
+    foo! {
+        x = 2;
+    };
+    x
+}
+"#,
+r#"
+macro! foo {
+    ($($x)*) => {
+        [$({let $y = $x; $y },)]
+    }
+}
+
+fn main() {
+    foo!(1 2 3)
+}
+"#,
     ];
     for (i, src) in srcs.iter().enumerate() {
         println!("test {}", i);

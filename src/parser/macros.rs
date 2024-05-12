@@ -1,4 +1,4 @@
-use crate::string::Str;
+use crate::string::{intern, Str};
 
 use super::lexer::Token;
 
@@ -21,6 +21,8 @@ pub struct MacroRules {
 pub struct MacroRule {
     pub pattern: Pattern,
     pub template: TokenItem,
+    pub pattern_variables: Vec<(Str, usize)>,
+    pub template_variables: Vec<(Str, usize)>,
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +65,7 @@ pub struct MacroCall {
 
 #[derive(Debug, Clone)]
 pub enum TokenItem {
+    // Variable will be only used in template
     Variable(Str),
     Token(Token<Str>),
     Paren(char, Vec<TokenSeqAppend>),
@@ -71,53 +74,13 @@ pub enum TokenItem {
 #[derive(Debug, Clone)]
 pub enum TokenSeqAppend {
     Token(TokenItem),
+    // Repeat will be only used in template
     Repeat(Vec<TokenItem>),
 }
 
-#[derive(Debug, Clone)]
-pub enum CapturedToken {
-    Token(TokenItem),
-    Vec(Vec<Option<CapturedToken>>),
-}
-
-impl CapturedToken {
-    pub fn depth(&self) -> usize {
-        match self {
-            CapturedToken::Token(_) => 0,
-            CapturedToken::Vec(v) => {
-                let mut max = 0;
-                for t in v {
-                    if let Some(t) = t {
-                        max = max.max(t.depth());
-                    }
-                }
-                max + 1
-            }
-        }
-    }
-
-    fn get(&self, indexes: &[usize]) -> Option<TokenItem> {
-        match self {
-            CapturedToken::Token(token) => {
-                if indexes.is_empty() {
-                    Some(token.clone())
-                } else {
-                    None
-                }
-            }
-            CapturedToken::Vec(v) => {
-                if let Some((index, indexes)) = indexes.split_first() {
-                    if let Some(ct) = v.get(*index) {
-                        ct.as_ref().and_then(|ct| ct.get(indexes))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
-        }
-    }
+pub struct Bind {
+    name: Str,
+    bind: Result<CapturedToken, usize>,
 }
 
 impl Macro {
@@ -139,10 +102,34 @@ impl Macro {
 impl MacroRules {
     pub fn expand<'a>(&self, token: &TokenItem) -> Option<Vec<Token<Str>>> {
         for rule in &self.rules {
-            let mut bindings = vec![];
-            if macro_pattern_match(&mut bindings, &rule.pattern, token) {
+            let mut bindings = rule
+                .pattern_variables
+                .iter()
+                .map(|(name, depth)| Bind {
+                    name: name.clone(),
+                    bind: Ok(CapturedToken::new(*depth)),
+                })
+                .collect();
+            if rule
+                .pattern
+                .pattern_match(&mut bindings, &mut vec![], token)
+            {
+                for v in &rule.template_variables {
+                    if !bindings.iter().any(|b| &b.name == &v.0) {
+                        bindings.push(Bind {
+                            name: v.0.clone(),
+                            bind: Err(v.1),
+                        });
+                    }
+                }
                 let mut tokens = Vec::new();
-                rule.template.render(&bindings, &mut vec![], &mut tokens);
+                if !rule
+                    .template
+                    .render(&mut bindings, &mut vec![], &mut tokens)
+                {
+                    panic!("render failed: {:?}", tokens);
+                }
+                // println!("tokens: {:?}", &tokens);
                 return Some(tokens);
             }
         }
@@ -150,121 +137,242 @@ impl MacroRules {
     }
 }
 
-pub fn macro_pattern_match(
-    bindings: &mut Vec<(Str, CapturedToken)>,
-    pattern: &Pattern,
-    token: &TokenItem,
-) -> bool {
-    if let Some(var) = &pattern.variable {
-        bindings.push((var.clone(), CapturedToken::Token(token.clone())));
+#[derive(Debug, Clone)]
+pub enum CapturedToken {
+    Token(Option<TokenItem>),
+    Vec(Vec<CapturedToken>),
+}
+
+impl CapturedToken {
+    pub fn new(depth: usize) -> Self {
+        if depth == 0 {
+            CapturedToken::Token(None)
+        } else {
+            CapturedToken::Vec(vec![CapturedToken::new(depth - 1)])
+        }
     }
 
-    match (&pattern.item, token) {
-        (PatternItem::Any, _) => true,
-        (PatternItem::Token(t1), TokenItem::Token(t2)) => t1 == t2,
-        (
-            PatternItem::Paren {
-                paren_type,
-                appends,
-            },
-            TokenItem::Paren(paren_type2, tokens),
-        ) if paren_type == paren_type2 => {
-            let mut i = 0;
-            for append in appends {
-                match append {
-                    PatternSeqAppend::Pattern(pat) => {
-                        let Some(TokenSeqAppend::Token(token)) = tokens.get(i) else {
-                            return false;
-                        };
-                        if !macro_pattern_match(bindings, pat, token) {
-                            return false;
-                        }
-                        i += 1;
+    fn get(&self, indexes: &[usize]) -> Option<TokenItem> {
+        match self {
+            CapturedToken::Token(token) => token.clone(),
+            CapturedToken::Vec(v) => {
+                if let Some((index, indexes)) = indexes.split_first() {
+                    if let Some(ct) = v.get(*index) {
+                        ct.get(indexes)
+                    } else {
+                        None
                     }
-                    PatternSeqAppend::Repeat { type_, seq } => {
-                        let max = match type_ {
-                            RepeatType::ZeroOrMore => usize::MAX,
-                            RepeatType::OneOrMore => usize::MAX,
-                            RepeatType::ZeroOrOne => 1,
-                        };
-                        let mut j = i;
-                        let mut bss: Vec<Vec<(Str, CapturedToken)>> = vec![];
-                        'outer: while j < max {
-                            bss.push(vec![]);
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    fn set(&mut self, indexes: &[usize], token: TokenItem) -> bool {
+        match self {
+            CapturedToken::Token(t) => {
+                if let Some(t) = t {
+                    t.unify(&token)
+                } else {
+                    *t = Some(token);
+                    true
+                }
+            }
+            CapturedToken::Vec(v) => {
+                if let Some((index, indexes)) = indexes.split_first() {
+                    v.resize_with(*index + 1, || CapturedToken::new(indexes.len()));
+                    if let Some(ct) = v.get_mut(*index) {
+                        ct.set(indexes, token)
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+        }
+    }
+}
+
+impl MacroRule {
+    pub fn new(pattern: Pattern, template: TokenItem) -> Self {
+        let mut pattern_variables = vec![];
+        pattern.collect_variables(0, &mut pattern_variables);
+        let mut template_variables = vec![];
+        template.collect_variables(0, &mut template_variables);
+
+        Self {
+            pattern,
+            template,
+            pattern_variables,
+            template_variables,
+        }
+    }
+}
+
+impl Pattern {
+    pub fn collect_variables(&self, depth: usize, variables: &mut Vec<(Str, usize)>) {
+        if let Some(var) = &self.variable {
+            if let Some((_, d)) = variables.iter_mut().find(|(v, _)| v == var) {
+                *d = depth.min(*d);
+            } else {
+                variables.push((var.clone(), depth));
+            }
+        }
+
+        match &self.item {
+            PatternItem::Any => {}
+            PatternItem::Token(_) => {}
+            PatternItem::Paren { appends, .. } => {
+                for append in appends {
+                    match append {
+                        PatternSeqAppend::Pattern(pat) => pat.collect_variables(depth, variables),
+                        PatternSeqAppend::Repeat { seq, .. } => {
                             for pat in seq {
-                                let Some(TokenSeqAppend::Token(token)) = tokens.get(i) else {
-                                    bss.pop();
-                                    break 'outer;
-                                };
-                                if !macro_pattern_match(bss.last_mut().unwrap(), pat, token) {
-                                    bss.pop();
-                                    break 'outer;
-                                }
-                                i += 1;
+                                pat.collect_variables(depth + 1, variables);
                             }
-                            j = i;
-                        }
-                        i = j;
-
-                        let mut names: Vec<std::sync::Arc<String>> = vec![];
-                        for bs in &bss {
-                            for (name, _) in bs {
-                                if !names.contains(&name) {
-                                    names.push(name.clone());
-                                }
-                            }
-                        }
-
-                        bindings.extend(
-                            names
-                                .iter()
-                                .map(|name| {
-                                    (
-                                        name.clone(),
-                                        CapturedToken::Vec(
-                                            bss.iter()
-                                                .map(|bs| {
-                                                    bs.iter()
-                                                        .find(|(name2, _)| name2 == name)
-                                                        .map(|(_, token)| token.clone())
-                                                })
-                                                .collect(),
-                                        ),
-                                    )
-                                })
-                                .collect::<Vec<_>>(),
-                        );
-
-                        if matches!(type_, RepeatType::OneOrMore) && bss.is_empty() {
-                            return false;
                         }
                     }
                 }
             }
-            tokens.len() == i
         }
-        _ => false,
+    }
+
+    pub fn pattern_match(
+        &self,
+        bindings: &mut Vec<Bind>,
+        indexes: &mut Vec<usize>,
+        token: &TokenItem,
+    ) -> bool {
+        if let Some(var) = &self.variable {
+            let bind = bindings
+                .iter_mut()
+                .find(|b| &b.name == var)
+                .expect("binding not found");
+            if !bind.bind.as_mut().unwrap().set(indexes, token.clone()) {
+                return false;
+            }
+        }
+
+        match (&self.item, token) {
+            (PatternItem::Any, _) => true,
+            (PatternItem::Token(t1), TokenItem::Token(t2)) => t1 == t2,
+            (
+                PatternItem::Paren {
+                    paren_type,
+                    appends,
+                },
+                TokenItem::Paren(paren_type2, tokens),
+            ) if paren_type == paren_type2 => {
+                let mut i = 0;
+                for append in appends {
+                    match append {
+                        PatternSeqAppend::Pattern(pat) => {
+                            let Some(TokenSeqAppend::Token(token)) = tokens.get(i) else {
+                                return false;
+                            };
+                            if !pat.pattern_match(bindings, indexes, token) {
+                                return false;
+                            }
+                            i += 1;
+                        }
+                        PatternSeqAppend::Repeat { type_, seq } => {
+                            let max = match type_ {
+                                RepeatType::ZeroOrMore => usize::MAX,
+                                RepeatType::OneOrMore => usize::MAX,
+                                RepeatType::ZeroOrOne => 1,
+                            };
+
+                            let mut j = i;
+                            let mut k = 0;
+                            'outer: while k < max {
+                                indexes.push(k);
+                                for pat in seq {
+                                    let Some(TokenSeqAppend::Token(token)) = tokens.get(i) else {
+                                        indexes.pop();
+                                        break 'outer;
+                                    };
+                                    if !pat.pattern_match(bindings, indexes, token) {
+                                        indexes.pop();
+                                        break 'outer;
+                                    }
+                                    i += 1;
+                                }
+                                indexes.pop();
+                                j = i;
+                                k += 1;
+                            }
+                            i = j;
+
+                            if matches!(type_, RepeatType::OneOrMore) && k == 0 {
+                                return false;
+                            }
+                        }
+                    }
+                }
+                tokens.len() == i
+            }
+            _ => false,
+        }
     }
 }
 
 impl TokenItem {
-    pub fn render<'a>(
+    pub fn collect_variables(&self, depth: usize, variables: &mut Vec<(Str, usize)>) {
+        match self {
+            TokenItem::Variable(var) => {
+                if let Some((_, d)) = variables.iter_mut().find(|(v, _)| v == var) {
+                    *d = depth.min(*d);
+                } else {
+                    variables.push((var.clone(), depth));
+                }
+            }
+            TokenItem::Token(_) => {}
+            TokenItem::Paren(_, appends) => {
+                for append in appends {
+                    match append {
+                        TokenSeqAppend::Token(ti) => ti.collect_variables(depth, variables),
+                        TokenSeqAppend::Repeat(tis) => {
+                            for ti in tis {
+                                ti.collect_variables(depth + 1, variables);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn render(
         &self,
-        bindings: &[(Str, CapturedToken)],
+        bindings: &mut Vec<Bind>,
         indexes: &mut Vec<usize>,
         rendered: &mut Vec<Token<Str>>,
     ) -> bool {
         match self {
             TokenItem::Variable(var) => {
-                if let Some(token) = bindings
-                    .iter()
-                    .find(|(v, _)| v == var)
-                    .and_then(|(_, ct)| ct.get(indexes))
-                {
-                    token.render(bindings, indexes, rendered); // TODO:?
-                } else {
-                    // dbg!(bindings, indexes, var);
-                    return false;
+                let bind = bindings.iter_mut().find(|b| &b.name == var).unwrap();
+                match &mut bind.bind {
+                    Ok(cap) => {
+                        if let Some(token) = cap.get(indexes) {
+                            token.render(bindings, indexes, rendered);
+                        } else {
+                            // End of sequence
+                            return false;
+                        }
+                    }
+                    Err(depth) => {
+                        let v = intern(&indexes[..*depth].iter().map(|i| i.to_string()).fold(
+                            format!("#${}", var),
+                            |mut acc, cur| {
+                                acc.push_str("-");
+                                acc.push_str(&cur);
+                                acc
+                            },
+                        ));
+                        rendered.push(Token::Identifier(v));
+                    }
                 }
             }
             TokenItem::Token(token) => rendered.push(token.clone()),
@@ -278,12 +386,12 @@ impl TokenItem {
                                 return false;
                             }
                         }
-                        TokenSeqAppend::Repeat(ts) => {
+                        TokenSeqAppend::Repeat(tis) => {
                             indexes.push(0);
                             'outer: loop {
                                 let string_len = rendered.len();
-                                for t in ts.iter() {
-                                    if !t.render(bindings, indexes, rendered) {
+                                for ti in tis.iter() {
+                                    if !ti.render(bindings, indexes, rendered) {
                                         rendered.truncate(string_len);
                                         break 'outer;
                                     }
@@ -304,6 +412,33 @@ impl TokenItem {
             }
         }
         true
+    }
+
+    pub fn unify(&mut self, other: &Self) -> bool {
+        match (self, other) {
+            (TokenItem::Variable(_), _) => panic!(),
+            (TokenItem::Token(token1), TokenItem::Token(token2)) => token1 == token2,
+            (TokenItem::Paren(paren_type1, tokens1), TokenItem::Paren(paren_type2, tokens2)) => {
+                if paren_type1 != paren_type2 {
+                    return false;
+                }
+                if tokens1.len() != tokens2.len() {
+                    return false;
+                }
+                for (t1, t2) in tokens1.iter_mut().zip(tokens2) {
+                    match (t1, t2) {
+                        (TokenSeqAppend::Token(t1), TokenSeqAppend::Token(t2)) => {
+                            if !t1.unify(t2) {
+                                return false;
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                true
+            }
+            _ => false,
+        }
     }
 }
 
@@ -343,236 +478,12 @@ impl std::fmt::Display for TokenItem {
     }
 }
 
-pub mod parser {
-
-    use crate::parser::{
-        identifier, keyword,
-        lexer::{AsStr, Token},
-        op,
-    };
-    use nom::{
-        branch::alt,
-        combinator::{cut, fail, map, value},
-        multi::many0,
-        IResult,
-    };
-
-    use super::*;
-
-    pub fn macro_def<'a, S: AsStr>(i: &'a [Token<S>]) -> IResult<&'a [Token<S>], Macro> {
-        let (i, _) = keyword("macro")(i)?;
-        let (i, _) = op("!")(i)?;
-        cut(|i| {
-            let (i, name) = identifier(i)?;
-            let (i, _) = paren('{')(i)?;
-            let (i, rules) = many0(macro_rule)(i)?;
-            let (i, _) = paren('}')(i)?;
-            Ok((i, Macro::Rules(MacroRules { name, rules })))
-        })(i)
-    }
-
-    pub fn macro_call<'a, S: AsStr>(i: &'a [Token<S>]) -> IResult<&'a [Token<S>], MacroCall> {
-        let (i, name) = identifier(i)?;
-        let (i, _) = op("!")(i)?;
-        let (i, token) = token_item(i)?;
-        Ok((i, MacroCall { name, arg: token }))
-    }
-
-    fn macro_rule<'a, S: AsStr>(i: &'a [Token<S>]) -> IResult<&'a [Token<S>], MacroRule> {
-        let (i, pattern) = macro_pattern(i)?;
-        let (i, _) = op("=>")(i)?;
-        let (i, template) = token_item(i)?;
-        Ok((i, MacroRule { pattern, template }))
-    }
-
-    fn macro_pattern<'a, S: AsStr>(i: &'a [Token<S>]) -> IResult<&'a [Token<S>], Pattern> {
-        alt((
-            // |i| {
-            //     let (i, _) = tag("$")(i)?;
-            //     let (i, _) = sp(i)?;
-            //     let (i, variable) = identifier(i)?;
-            //     let (i, _) = sp(i)?;
-            //     let (i, _) = tag(":")(i)?;
-            //     let (i, _) = sp(i)?;
-            //     let (i, item) = macro_pattern_item(i)?;
-            //     Ok((
-            //         i,
-            //         Pattern {
-            //             variable: Some(variable),
-            //             item,
-            //         },
-            //     ))
-            // },
-            |i| {
-                let (i, _) = op("$")(i)?;
-                let (i, variable) = identifier(i)?;
-                Ok((
-                    i,
-                    Pattern {
-                        variable: Some(variable),
-                        item: PatternItem::Any,
-                    },
-                ))
-            },
-            map(macro_pattern_item, |item| Pattern {
-                variable: None,
-                item,
-            }),
-        ))(i)
-    }
-
-    fn macro_pattern_item<'a, S: AsStr>(i: &'a [Token<S>]) -> IResult<&'a [Token<S>], PatternItem> {
-        alt((
-            |i| {
-                let (i, paren_type) = alt((paren('('), paren('['), paren('{')))(i)?;
-                let (i, appends) = many0(macro_pattern_seq_append)(i)?;
-                let (i, _) = paren(match paren_type {
-                    '(' => ')',
-                    '[' => ']',
-                    '{' => '}',
-                    _ => unreachable!(),
-                })(i)?;
-                Ok((
-                    i,
-                    PatternItem::Paren {
-                        paren_type,
-                        appends,
-                    },
-                ))
-            },
-            map(any_op, |op| PatternItem::Token(op)),
-            |i: &'a [Token<S>]| {
-                if let Some(t) = i.first() {
-                    match t {
-                        Token::Keyword(_)
-                        | Token::Identifier(_)
-                        | Token::String(_)
-                        | Token::Int(_)
-                        | Token::Float(_) => Ok((&i[1..], PatternItem::Token(t.interned()))),
-                        Token::Operator(_) | Token::Paren(_) => fail(i),
-                    }
-                } else {
-                    fail(i)
-                }
-            },
-        ))(i)
-    }
-
-    fn macro_pattern_seq_append<'a, S: AsStr>(
-        i: &'a [Token<S>],
-    ) -> IResult<&'a [Token<S>], PatternSeqAppend> {
-        alt((
-            |i| {
-                let (i, _) = op("$")(i)?;
-                let (i, _) = paren('(')(i)?;
-                let (i, seq) = many0(macro_pattern)(i)?;
-                let (i, _) = paren(')')(i)?;
-                let (i, type_) = alt((
-                    value(RepeatType::ZeroOrMore, op("*")),
-                    value(RepeatType::OneOrMore, op("+")),
-                    value(RepeatType::ZeroOrOne, op("?")),
-                ))(i)?;
-                Ok((i, PatternSeqAppend::Repeat { type_, seq }))
-            },
-            map(macro_pattern, PatternSeqAppend::Pattern),
-        ))(i)
-    }
-
-    fn any_op<'a, S: AsStr>(i: &'a [Token<S>]) -> IResult<&'a [Token<S>], Token<Str>> {
-        map(
-            alt((
-                alt((
-                    op("=="),
-                    op("!="),
-                    op(">="),
-                    op("<="),
-                    op("||"),
-                    op("&&"),
-                    op(".."),
-                    op("=>"),
-                )),
-                alt((
-                    op("="),
-                    op("+"),
-                    op("-"),
-                    op("*"),
-                    op("/"),
-                    op("%"),
-                    op("!"),
-                    op(">"),
-                    op("<"),
-                    op("."),
-                    op(","),
-                    op(":"),
-                    op(";"),
-                    op("|"),
-                    op("'"),
-                )),
-            )),
-            |s: &S| Token::Operator(s.interned()),
-        )(i)
-    }
-
-    fn token_item<'a, S: AsStr>(i: &'a [Token<S>]) -> IResult<&'a [Token<S>], TokenItem> {
-        alt((
-            |i| {
-                let (i, paren_type) = alt((paren('('), paren('['), paren('{')))(i)?;
-                let (i, appends) = many0(alt((map(token_item, TokenSeqAppend::Token), |i| {
-                    let (i, _) = op("$")(i)?;
-                    let (i, _) = paren('(')(i)?;
-                    let (i, tokens) = many0(token_item)(i)?;
-                    let (i, _) = paren(')')(i)?;
-                    Ok((i, TokenSeqAppend::Repeat(tokens)))
-                })))(i)?;
-                let (i, _) = paren(match paren_type {
-                    '(' => ')',
-                    '[' => ']',
-                    '{' => '}',
-                    _ => unreachable!(),
-                })(i)?;
-                Ok((i, TokenItem::Paren(paren_type, appends)))
-            },
-            |i| {
-                let (i, _) = op("$")(i)?;
-                let (i, var) = identifier(i)?;
-                Ok((i, TokenItem::Variable(var)))
-            },
-            map(any_op, |op| TokenItem::Token(op)),
-            |i: &'a [Token<S>]| {
-                if let Some(t) = i.first() {
-                    match t {
-                        Token::Keyword(_)
-                        | Token::Identifier(_)
-                        | Token::String(_)
-                        | Token::Int(_)
-                        | Token::Float(_) => Ok((&i[1..], TokenItem::Token(t.interned()))),
-                        Token::Operator(_) | Token::Paren(_) => fail(i),
-                    }
-                } else {
-                    fail(i)
-                }
-            },
-        ))(i)
-    }
-
-    fn paren<S: AsStr>(name: char) -> impl FnMut(&[Token<S>]) -> IResult<&[Token<S>], char> {
-        move |i| {
-            if let Some(Token::Paren(c)) = i.first() {
-                if *c == name {
-                    return Ok((&i[1..], name));
-                }
-            }
-            fail(i)
-        }
-    }
-}
-
 pub fn builtin() -> Vec<Macro> {
     vec![Macro::NativeFn {
         name: crate::string::intern("stringify"),
         fun: |token| {
             let mut tokens = Vec::new();
-            token.render(&[], &mut vec![], &mut tokens);
+            token.render(&mut vec![], &mut vec![], &mut tokens);
             tokens
         },
     }]

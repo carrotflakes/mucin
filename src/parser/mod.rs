@@ -1,4 +1,5 @@
 mod lexer;
+mod macro_parser;
 pub mod macros;
 mod string;
 
@@ -21,10 +22,8 @@ use crate::{
 
 use self::{
     lexer::{lex, AsStr, Token},
-    macros::{
-        parser::{macro_call, macro_def},
-        Macro,
-    },
+    macro_parser::{macro_call, macro_def},
+    macros::Macro,
 };
 
 thread_local! {
