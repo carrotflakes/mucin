@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use gc_arena::{lock::RefLock, Gc, Mutation};
 
 use crate::{
-    value::{Dict, StructType, Value},
+    value::{Closure, Dict, StructType, Value},
     vm::{Env, Vm},
 };
 
@@ -62,16 +62,22 @@ impl<'gc> Repository<'gc> {
         })
     }
 
-    pub fn build(&mut self, outer_envs: &[Env<'gc>]) -> Result<Env<'gc>, String> {
+    pub fn build(
+        &mut self,
+        outer_envs: &[Env<'gc>],
+        method_call_fn: Option<Closure<'gc>>,
+    ) -> Result<Env<'gc>, String> {
         let mut build_results: HashMap<Arc<String>, BuildResult> = HashMap::new();
 
         for file in self.files.iter().rev() {
-            let mut builder = crate::compile::Builder::new(self.mc);
-            let mut envs = vec![];
-            for env in outer_envs {
-                builder = builder.wrap_env(env.borrow().struct_type.fields.to_vec());
-                envs.push(env.clone());
-            }
+            let mut builder = crate::compile::Builder::new(self.mc)
+                .wrap_envs(
+                    outer_envs
+                        .iter()
+                        .map(|env| env.borrow().struct_type.fields.to_vec())
+                        .collect(),
+                )
+                .use_method_call_fn(method_call_fn.clone());
 
             let env_map = builder.build_program(&file.defines)?;
             let struct_type = Gc::new(
@@ -83,7 +89,11 @@ impl<'gc> Repository<'gc> {
                 },
             );
 
-            let env = Vm::new(self.mc).make_env(envs, struct_type, builder.into_instructions())?;
+            let env = Vm::new(self.mc).make_env(
+                outer_envs.to_vec(),
+                struct_type,
+                builder.into_instructions(),
+            )?;
 
             // Inject modules
             for (i, def) in file.defines.iter().enumerate() {
@@ -140,7 +150,7 @@ fn main(): b.a.hello + b.world
             }
         };
         let mut repo = Repository::load(mc, loader, "main".to_string()).unwrap();
-        let env = repo.build(&[]).unwrap();
+        let env = repo.build(&[], None).unwrap();
 
         let main_closure = env
             .borrow()

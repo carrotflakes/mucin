@@ -209,10 +209,6 @@ fn nf_struct_type_methods<'gc>(
 
 fn nf_index<'gc>(_: &Mutation, values: &[Value<'gc>]) -> Result<Value<'gc>, String> {
     Ok(match &values[0] {
-        Value::Pair(t) => match &values[1] {
-            Value::Int(i) => t[*i as usize].clone(),
-            _ => return Err(format!("indexing with non-integer value: {:?}", values[1])),
-        },
         Value::Vec(v) => match &values[1] {
             Value::Int(i) => v.borrow().get(*i as usize).cloned().unwrap_or(Value::Unit),
             Value::String(s) if s.as_str() == "len" => Value::Int(v.borrow().len() as i64),

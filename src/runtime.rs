@@ -65,7 +65,7 @@ impl Runtime {
                     crate::multi_file_builder::Error::ParseError(e) => e,
                     crate::multi_file_builder::Error::LoadError(e) => e,
                 })?;
-            let env = rep.build(&inner.envs)?;
+            let env = rep.build(&inner.envs, inner.method_call_fn.clone())?;
             inner.envs.push(env);
             Ok(())
         })
@@ -198,12 +198,12 @@ impl<'gc> RuntimeInner<'gc> {
                     .collect(),
             )
             .use_method_call_fn(self.method_call_fn.clone());
-        let names = builder.build_program(&defs)?;
+        let env_map = builder.build_program(&defs)?;
         let struct_type = Gc::new(
             mc,
             StructType {
                 name: intern(""),
-                fields: names.into_boxed_slice(),
+                fields: env_map.into_boxed_slice(),
                 methods: Gc::new(mc, RefLock::new(Dict::default())),
             },
         );

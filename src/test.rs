@@ -298,6 +298,19 @@ fn f() {
     a.push(4);
 }
 "#,
+r#"
+fn main() {
+    var i = 0;
+    let a = [];
+    while i < 4 {
+        defer {
+            i += 1;
+        };
+        a.push(i);
+    };
+    a
+}
+"#,
 // r#"
 // macro! foo {
 //     ($x) => {
