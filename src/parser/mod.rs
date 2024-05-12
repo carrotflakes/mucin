@@ -664,7 +664,7 @@ fn pattern<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Pattern> {
 }
 
 fn statement<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Statement> {
-    alt((let_statement, assign_statement))(i)
+    alt((let_statement, defer_statement, assign_statement))(i)
 }
 
 fn let_statement<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Statement> {
@@ -683,6 +683,12 @@ fn let_statement<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Statement> {
             },
         ))
     })(i)
+}
+
+fn defer_statement<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Statement> {
+    let (i, _) = keyword("defer")(i)?;
+    let (i, expr) = control(i)?;
+    Ok((i, Statement::Defer { expr }))
 }
 
 fn assign_statement<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Statement> {
@@ -873,6 +879,7 @@ fn any_keyword<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], ()> {
         keyword("match"),
         keyword("break"),
         keyword("continue"),
+        keyword("defer"),
     ))(i)
 }
 

@@ -282,6 +282,22 @@ r#"
 fn main(): f(1, ..[2, 3], 4, ..[5, 6])
 fn f(a, b, c, d, e, f): [a, b, c, d, e, f]
 "#,
+r#"
+let a = [];
+fn main() {f(); a}
+fn f() {
+    defer a.push(6);
+    let x = 5;
+    defer a.push(x);
+    a.push(1);
+    let x = 3;
+    {
+        defer a.push(x);
+        a.push(2);
+    };
+    a.push(4);
+}
+"#,
 // r#"
 // macro! foo {
 //     ($x) => {

@@ -28,6 +28,8 @@ pub struct Builder<'gc> {
     labels: Vec<Label>,
     break_indexes: Vec<(Str, usize)>,
     instructions_offset: usize,
+    defered: Vec<(model::Expression, usize)>,
+    env_truncate: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -35,6 +37,7 @@ struct Label {
     name: Str,
     continue_index: usize,
     stack_size: usize,
+    defered_len: usize,
 }
 
 impl<'gc> Builder<'gc> {
@@ -48,6 +51,8 @@ impl<'gc> Builder<'gc> {
             labels: vec![],
             break_indexes: vec![],
             instructions_offset: 0,
+            defered: vec![],
+            env_truncate: usize::MAX,
         }
     }
 
@@ -76,6 +81,8 @@ impl<'gc> Builder<'gc> {
             labels: self.labels.clone(),
             break_indexes: vec![],
             instructions_offset: self.instructions_offset + self.instructions.len(),
+            defered: self.defered.clone(),
+            env_truncate: self.env_truncate,
         }
     }
 
@@ -209,6 +216,8 @@ impl<'gc> Builder<'gc> {
             labels: vec![],
             break_indexes: vec![],
             instructions_offset: 0,
+            defered: vec![],
+            env_truncate: usize::MAX,
         };
 
         builder.envs.push(
@@ -227,6 +236,12 @@ impl<'gc> Builder<'gc> {
             Err(Error::Break) => panic!("unexpected break in function definition"),
             Err(Error::String(err)) => return Err(err),
         }
+
+        if !builder.break_indexes.is_empty() {
+            return Err("unexpected break in function definition".to_owned());
+        }
+
+        builder.build_defer(0).unwrap();
 
         let frame = builder.envs.pop().unwrap();
         let frame = Gc::new(
@@ -344,6 +359,10 @@ impl<'gc> Builder<'gc> {
                         .push(Instruction::CallNative(&NF_FIELD_ASSIGN));
                     self.instructions.push(Instruction::Pop);
                     self.stack_size -= 3;
+                }
+                model::Statement::Defer { expr } => {
+                    self.defered
+                        .push((expr.clone(), self.envs.last().unwrap().len()));
                 }
             }
 
@@ -488,21 +507,7 @@ impl<'gc> Builder<'gc> {
                 self.build_vec(appends)?;
             }
             model::Expression::Dict { appends } => {
-                for append in appends {
-                    match append {
-                        model::DictAppend::Field(name, expr) => {
-                            self.instructions
-                                .push(Instruction::Push(Box::new(Value::String(name.clone()))));
-                            self.stack_size += 1;
-                            self.build_expression(expr)?;
-                            self.instructions.push(Instruction::MakePair);
-                            self.stack_size -= 1;
-                        }
-                        model::DictAppend::Spread(expr) => {
-                            self.build_expression(expr)?;
-                        }
-                    }
-                }
+                self.build_dict_appends(appends)?;
                 self.instructions.push(Instruction::MakeDict(appends.len()));
                 self.stack_size += 1;
                 self.stack_size -= appends.len();
@@ -511,21 +516,7 @@ impl<'gc> Builder<'gc> {
                 constructor,
                 appends,
             } => {
-                for append in appends {
-                    match append {
-                        model::DictAppend::Field(name, expr) => {
-                            self.instructions
-                                .push(Instruction::Push(Box::new(Value::String(name.clone()))));
-                            self.stack_size += 1;
-                            self.build_expression(expr)?;
-                            self.instructions.push(Instruction::MakePair);
-                            self.stack_size -= 1;
-                        }
-                        model::DictAppend::Spread(expr) => {
-                            self.build_expression(expr)?;
-                        }
-                    }
-                }
+                self.build_dict_appends(appends)?;
                 self.build_expression(constructor)?;
                 self.instructions
                     .push(Instruction::MakeStruct(appends.len()));
@@ -628,6 +619,7 @@ impl<'gc> Builder<'gc> {
                     name: label.clone(),
                     continue_index,
                     stack_size: self.stack_size,
+                    defered_len: self.defered.len(),
                 });
                 let env_len = self.envs.last().unwrap().len();
 
@@ -642,16 +634,14 @@ impl<'gc> Builder<'gc> {
 
                 self.labels.pop();
                 let index_to_break = self.instructions_offset + self.instructions.len();
-                for (name, break_index) in self.break_indexes.iter() {
-                    if !(name.is_empty() || name == label) {
-                        continue;
+                for (name, break_index) in &self.break_indexes {
+                    if name.is_empty() || name == label {
+                        assert!(matches!(
+                            self.instructions[*break_index],
+                            Instruction::Jump(0)
+                        ));
+                        self.instructions[*break_index] = Instruction::Jump(index_to_break);
                     }
-
-                    assert!(matches!(
-                        self.instructions[*break_index],
-                        Instruction::Jump(0)
-                    ));
-                    self.instructions[*break_index] = Instruction::Jump(index_to_break);
                 }
                 self.break_indexes.retain(|(name, _)| name != label);
 
@@ -665,25 +655,51 @@ impl<'gc> Builder<'gc> {
             }
             model::Expression::Block(block) => {
                 let env_len = self.envs.last().unwrap().len();
-                self.build_block(block)?;
+                let defered_len = self.defered.len();
+
+                let res = self.build_block(block);
+                match res {
+                    Ok(()) => {}
+                    Err(Error::String(e)) => return Err(Error::String(e)),
+                    Err(Error::Return) | Err(Error::Break) => {}
+                }
+
+                self.build_defer(defered_len)?;
+
                 self.envs.last_mut().unwrap()[env_len..].fill_with(|| (intern(""), false));
+
+                return res;
             }
             model::Expression::Return { expr } => {
+                if self.stack_size > 0 {
+                    self.instructions
+                        .push(Instruction::Rewind(self.stack_size, false));
+                    self.stack_size = 0;
+                }
+
                 if let Some(expr) = expr {
                     self.build_expression(expr)?;
                 } else {
                     self.instructions.push(Instruction::PushUnit);
                     self.stack_size += 1;
                 }
-                if self.stack_size > 1 {
-                    self.instructions
-                        .push(Instruction::Rewind(self.stack_size, true));
-                    self.stack_size = 1;
-                }
+
+                self.build_defer(0)?;
+
                 self.instructions.push(Instruction::Return);
                 return Err(Error::Return);
             }
             model::Expression::Break { label, expr } => {
+                let Some(label) = self.get_label(label) else {
+                    return Err(Error::String("break outside of labeled".to_owned()));
+                };
+
+                let rewind = self.stack_size - label.stack_size;
+                if rewind > 0 {
+                    self.instructions.push(Instruction::Rewind(rewind, false));
+                    self.stack_size = label.stack_size;
+                }
+
                 if let Some(expr) = expr {
                     self.build_expression(expr)?;
                 } else {
@@ -691,38 +707,24 @@ impl<'gc> Builder<'gc> {
                     self.stack_size += 1;
                 };
 
-                let Some(label) = self
-                    .labels
-                    .iter()
-                    .rev()
-                    .find(|cp| label.is_empty() || &cp.name == label)
-                else {
-                    return Err(Error::String("break outside of labeled".to_owned()));
-                };
-                let rewind = self.stack_size - label.stack_size;
-                if rewind > 0 {
-                    self.instructions.push(Instruction::Rewind(rewind, true));
-                    self.stack_size = label.stack_size + 1;
-                }
+                self.build_defer(label.defered_len)?;
+
                 self.break_indexes
-                    .push((label.name.clone(), self.instructions.len()));
+                    .push((label.name, self.instructions.len()));
                 self.instructions.push(Instruction::Jump(0));
                 return Err(Error::Break);
             }
             model::Expression::Continue { label } => {
-                let Some(label) = self
-                    .labels
-                    .iter()
-                    .rev()
-                    .find(|cp| label.is_empty() || &cp.name == label)
-                else {
+                let Some(label) = self.get_label(label) else {
                     return Err(Error::String("continue outside of labeled".to_owned()));
                 };
+
                 let rewind = self.stack_size - label.stack_size;
                 if rewind > 0 {
                     self.instructions.push(Instruction::Rewind(rewind, false));
                     self.stack_size = label.stack_size;
                 }
+
                 self.instructions
                     .push(Instruction::Jump(label.continue_index));
                 return Err(Error::Break);
@@ -740,6 +742,25 @@ impl<'gc> Builder<'gc> {
             }
         }
         Ok(())
+    }
+
+    #[must_use]
+    fn build_dict_appends(&mut self, appends: &Vec<model::DictAppend>) -> Result<()> {
+        Ok(for append in appends {
+            match append {
+                model::DictAppend::Field(name, expr) => {
+                    self.instructions
+                        .push(Instruction::Push(Box::new(Value::String(name.clone()))));
+                    self.stack_size += 1;
+                    self.build_expression(expr)?;
+                    self.instructions.push(Instruction::MakePair);
+                    self.stack_size -= 1;
+                }
+                model::DictAppend::Spread(expr) => {
+                    self.build_expression(expr)?;
+                }
+            }
+        })
     }
 
     #[must_use]
@@ -785,6 +806,26 @@ impl<'gc> Builder<'gc> {
         })
     }
 
+    #[must_use]
+    fn build_defer(&mut self, defered_len: usize) -> Result<()> {
+        while defered_len < self.defered.len() {
+            let (expr, env_len) = self.defered.pop().unwrap();
+            self.env_truncate = env_len;
+            self.build_expression(&expr)?;
+            self.instructions.push(Instruction::Pop);
+            self.stack_size -= 1;
+        }
+        Ok(())
+    }
+
+    fn get_label(&mut self, label: &Str) -> Option<Label> {
+        self.labels
+            .iter()
+            .rev()
+            .find(|cp| label.is_empty() || &cp.name == label)
+            .cloned()
+    }
+
     fn add_var(&mut self, name: Str, mutable: bool) -> (u16, u16) {
         let index = self.envs.len() - 1;
         let index2 = self.envs.last().unwrap().len();
@@ -794,11 +835,13 @@ impl<'gc> Builder<'gc> {
 
     fn resolve_variable(&self, name: &str) -> Option<(usize, usize, bool)> {
         self.envs.iter().enumerate().rev().find_map(|(i1, env)| {
-            env.iter()
-                .enumerate()
-                .rev()
-                .find(|(_, n)| n.0.as_str() == name)
-                .map(|(i2, (_, mutable))| (i1, i2, *mutable))
+            env.iter().enumerate().rev().find_map(|(i2, (n, mutable))| {
+                if (i1 < self.envs.len() - 1 || i2 < self.env_truncate) && n.as_str() == name {
+                    Some((i1, i2, *mutable))
+                } else {
+                    None
+                }
+            })
         })
     }
 }

@@ -47,6 +47,9 @@ pub enum Statement {
         expr: Expression,
         op: Option<Str>,
     },
+    Defer {
+        expr: Expression,
+    },
 }
 
 #[derive(Debug, Clone)]

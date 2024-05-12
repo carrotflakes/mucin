@@ -54,6 +54,7 @@ impl FunctionEnv {
                     self.expression(field);
                     self.expression(expr);
                 }
+                model::Statement::Defer { expr } => self.expression(expr),
             }
         }
         if let Some(expr) = &block.expr {

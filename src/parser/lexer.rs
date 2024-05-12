@@ -108,6 +108,7 @@ fn keyword(i: &str) -> IResult<&str, &str> {
             tag("match"),
             tag("break"),
             tag("continue"),
+            tag("defer"),
             tag("macro"),
             tag("mod"),
             tag("true"),
