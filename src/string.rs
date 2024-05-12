@@ -1,10 +1,10 @@
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 pub type Str = Arc<String>;
 
 #[derive(Debug)]
 pub struct StrPool {
-    pool: Vec<Weak<String>>,
+    pool: Vec<Arc<String>>,
 }
 
 impl StrPool {
@@ -14,8 +14,7 @@ impl StrPool {
 
     pub fn from_strs(strs: &[&str]) -> (Self, Vec<Str>) {
         let strs: Vec<_> = strs.iter().map(|s| Arc::new(s.to_string())).collect();
-        let pool = strs.iter().map(|s| Arc::downgrade(s)).collect();
-        let pool = Self { pool };
+        let pool = Self { pool: strs.clone() };
         (pool, strs)
     }
 
@@ -25,20 +24,15 @@ impl StrPool {
         }
 
         let str = Arc::new(s.to_string());
-        self.pool.push(Arc::downgrade(&str));
+        self.pool.push(str.clone());
         str
     }
 
     pub fn try_intern(&mut self, s: &str) -> Option<Str> {
-        for interned in &self.pool {
-            if let Some(interned) = interned.upgrade() {
-                if interned.as_str() == s {
-                    return Some(interned.clone());
-                }
-            }
-        }
-
-        None
+        self.pool
+            .iter()
+            .find(|interned| interned.as_str() == s)
+            .cloned()
     }
 
     pub fn size(&self) -> usize {
@@ -46,7 +40,7 @@ impl StrPool {
     }
 
     pub fn compact(&mut self) {
-        self.pool.retain(|weak| weak.strong_count() > 0);
+        self.pool.retain(|str| Arc::strong_count(str) > 1);
     }
 }
 
