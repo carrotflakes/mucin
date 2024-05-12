@@ -138,7 +138,7 @@ let world = "World";
         let c = r#"
 mod b;
 
-fn main(): b.a.hello + b.world
+fn main() b.a.hello + b.world
 "#;
 
         let loader = |path: &str| -> Result<String, String> {

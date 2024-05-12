@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use nom::{
     branch::alt,
-    combinator::{cut, fail, map, not, opt, peek, value},
+    combinator::{cut, fail, map, not, opt, value},
     multi::{many0, separated_list0},
     sequence::{preceded, terminated},
     IResult,
@@ -136,7 +136,15 @@ fn function_def<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Definition> {
     let (i, _) = keyword("fn")(i)?;
     cut(alt((
         |i| {
-            let (i, receiver) = indexing(i)?;
+            let (i, receiver) = alt((
+                |i| {
+                    let (i, _) = paren('(')(i)?;
+                    let (i, expr) = indexing(i)?;
+                    let (i, _) = paren(')')(i)?;
+                    Ok((i, expr))
+                },
+                map(identifier, |i| Expression::Variable { name: i }),
+            ))(i)?;
             let (i, name) = identifier(i)?;
             let (i, _) = paren('(')(i)?;
             let (i, args) = separated_list0(op(","), identifier)(i)?;
@@ -188,20 +196,14 @@ fn module_def<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Definition> {
 }
 
 fn body<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
-    let (i, _) = colon_if_not_keyword(i)?;
-    control(i)
-}
-
-fn colon_if_not_keyword<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], ()> {
     alt((
-        terminated(
-            peek(alt((
-                value((), any_keyword),
-                value((), alt((paren('['), paren('{')))),
-            ))),
-            opt(op(":")),
-        ),
-        value((), op(":")),
+        map(statement, |stmt| {
+            Expression::Block(Block {
+                statements: vec![stmt],
+                expr: None,
+            })
+        }),
+        control,
     ))(i)
 }
 
@@ -687,7 +689,7 @@ fn let_statement<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Statement> {
 
 fn defer_statement<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Statement> {
     let (i, _) = keyword("defer")(i)?;
-    let (i, expr) = control(i)?;
+    let (i, expr) = cut(body)(i)?;
     Ok((i, Statement::Defer { expr }))
 }
 
@@ -864,25 +866,6 @@ fn keyword<S: AsStr>(name: &'static str) -> impl FnMut(&[Token<S>]) -> IResult<&
     }
 }
 
-fn any_keyword<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], ()> {
-    alt((
-        keyword("fn"),
-        keyword("struct"),
-        keyword("let"),
-        keyword("var"),
-        keyword("return"),
-        keyword("if"),
-        keyword("else"),
-        keyword("loop"),
-        keyword("while"),
-        keyword("for"),
-        keyword("match"),
-        keyword("break"),
-        keyword("continue"),
-        keyword("defer"),
-    ))(i)
-}
-
 fn op<S: AsStr>(name: &'static str) -> impl FnMut(&[Token<S>]) -> IResult<&[Token<S>], &S> {
     move |i| {
         if let Some(Token::Operator(k)) = i.first() {
@@ -963,12 +946,12 @@ fn main() {
 }"#,
         r#"
 fn fib(n)
-    if 2 > n:
+    if 2 > n
         1
-    else:
+    else
         fib(n - 1) + fib(n - 2)
 
-fn main():
+fn main()
     [fib(1), fib(2)]
 "#,
         r#"
@@ -979,7 +962,7 @@ fn f()
         else
             continue"#,
         r#"
-let a = if a if b:1 else:2 else:3;"#,
+let a = if a if b 1 else 2 else 3;"#,
         r#"
 fn main() {
     1
@@ -987,7 +970,7 @@ fn main() {
 }
 "#,
         r#"
-fn main(): breaking
+fn main() breaking
 "#,
     ];
     for input in &inputs {

@@ -383,9 +383,9 @@ impl<'gc> Vm<'gc> {
 #[test]
 fn test_stack_trace() {
     let src = r#"
-fn main(): a()
-fn a(): b()
-fn b(): panic("error")
+fn main() a()
+fn a() b()
+fn b() panic("error")
 "#;
     let mut runtime = crate::runtime::Runtime::new();
     runtime.push_env_from_src(src).unwrap();

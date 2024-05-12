@@ -112,18 +112,18 @@ fn main() {
     a
 }"#,
         r#"
-fn f(a):
-    if a < 2:
-        if a < 1:
+fn f(a)
+    if a < 2
+        if a < 1
             0
-        else:
+        else
             1
-    else:if a < 3:
+    else if a < 3
         2
-    else:
+    else
         3
 
-fn main():
+fn main()
     [f(0), f(1), f(2), f(3)]"#,
         r#"
 fn main() {
@@ -190,10 +190,10 @@ macro! s {
     $x => $x
 }
 
-fn main(): s!(print (list (+ 1 2) "hello"))
+fn main() s!(print (list (+ 1 2) "hello"))
   "#,
         r#"
-fn main(): {
+fn main() {
     let a = 0;
     let b = 1 && null || {
         let a = 1;
@@ -212,7 +212,7 @@ fn User incAge(self) {
     self.age = self.age + 1;
 }
 
-fn main(): {
+fn main() {
     let u = User {name: "niko", age: 8};
     u.name = "niko!";
     // structTypeMethods(User).incAge(u);
@@ -249,7 +249,7 @@ fn main() {
 }
 "#,
         r#"
-fn main(): 1 + 2 - 3 * 4 % 5
+fn main() 1 + 2 - 3 * 4 % 5
 "#,     r#"
 fn main() {
     var a = 1;
@@ -276,11 +276,11 @@ fn main() {
 }
 "#,
 r#"
-fn main(): [1, ..[2, 3], 4, ..[5, 6]]
+fn main() [1, ..[2, 3], 4, ..[5, 6]]
 "#,
 r#"
-fn main(): f(1, ..[2, 3], 4, ..[5, 6])
-fn f(a, b, c, d, e, f): [a, b, c, d, e, f]
+fn main() f(1, ..[2, 3], 4, ..[5, 6])
+fn f(a, b, c, d, e, f) [a, b, c, d, e, f]
 "#,
 r#"
 let a = [];
@@ -303,9 +303,7 @@ fn main() {
     var i = 0;
     let a = [];
     while i < 4 {
-        defer {
-            i += 1;
-        };
+        defer i += 1;
         a.push(i);
     };
     a

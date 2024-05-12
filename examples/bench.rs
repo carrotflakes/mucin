@@ -40,12 +40,12 @@ fn main() {
 }
 
 const SRC1: &str = r#"
-fn main(): f(20)
+fn main() f(20)
 
-fn f(i):
-    if i == 0:
-        ()
-    else:
+fn f(i)
+    if i == 0
+        {}
+    else
         {
             left: f(i - 1),
             right: f(i - 1),
@@ -53,11 +53,11 @@ fn f(i):
 "#;
 
 const SRC2: &str = r#"
-fn main(): f(20)
+fn main() f(20)
 
-fn f(i):
-    if i == 0:
-        ()
-    else:
+fn f(i)
+    if i == 0
+        {}
+    else
         [f(i - 1), f(i - 1)]
 "#;
