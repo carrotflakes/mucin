@@ -274,7 +274,24 @@ r#"
 fn main() {
     [[1, 2, 3].map(|x| x + 1), [1, 2, 3].map(|x, i, y| i)]
 }
-"#
+"#,
+r#"
+fn main(): [1, ..[2, 3], 4, ..[5, 6]]
+"#,
+r#"
+fn main(): f(1, ..[2, 3], 4, ..[5, 6])
+fn f(a, b, c, d, e, f): [a, b, c, d, e, f]
+"#,
+// r#"
+// macro! foo {
+//     ($x) => {
+//         let x = $x;
+//         x
+//     }
+// }
+
+// fn main(): foo!(1)
+// "#,
     ];
     for (i, src) in srcs.iter().enumerate() {
         println!("test {}", i);

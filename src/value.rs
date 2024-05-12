@@ -19,7 +19,8 @@ pub enum Value<'gc> {
     Float(f64),
     String(Str),
 
-    Tuple(Box<[Value<'gc>]>),
+    // NOTE: Box<[Value<'gc>; 2]> is slow
+    Pair(Box<[Value<'gc>]>),
     Vec(Gc<'gc, RefLock<Vec<Value<'gc>>>>),
     Dict(Gc<'gc, RefLock<Dict<'gc>>>),
     StructType(Gc<'gc, StructType<'gc>>),
@@ -261,7 +262,7 @@ impl<'gc> PartialEq for Value<'gc> {
 
             (Value::Vec(left), Value::Vec(right)) => Gc::ptr_eq(*left, *right),
             (Value::Dict(left), Value::Dict(right)) => Gc::ptr_eq(*left, *right),
-            (Value::Tuple(left), Value::Tuple(right)) => left == right,
+            (Value::Pair(left), Value::Pair(right)) => left == right,
             (Value::StructType(left), Value::StructType(right)) => Gc::ptr_eq(*left, *right),
             (Value::Struct(left), Value::Struct(right)) => Gc::ptr_eq(*left, *right),
             (Value::Any(left), Value::Any(right)) => Arc::ptr_eq(left, right),
@@ -284,7 +285,7 @@ impl<'gc> std::fmt::Debug for Value<'gc> {
             Value::Int(value) => write!(f, "{}", value),
             Value::Float(value) => write!(f, "{}", value),
             Value::String(value) => write!(f, "{:?}", value),
-            Value::Tuple(value) => write!(f, "{:?}", value),
+            Value::Pair(value) => write!(f, "{:?}", value),
             Value::Vec(vec) => write!(f, "{:?}", vec.borrow()),
             Value::Dict(dict) => write!(f, "{:?}", dict.borrow()),
             Value::StructType(struct_type) => write!(f, "{:?}", &struct_type.fields),
@@ -305,7 +306,7 @@ impl<'gc> std::fmt::Display for Value<'gc> {
             Value::Int(value) => write!(f, "{}", value),
             Value::Float(value) => write!(f, "{}", value),
             Value::String(value) => write!(f, "{}", value),
-            Value::Tuple(values) => {
+            Value::Pair(values) => {
                 let f: &mut std::fmt::Formatter<'_> = f;
                 write!(f, "(")?;
                 for (i, value) in values.iter().enumerate() {

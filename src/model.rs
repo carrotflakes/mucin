@@ -78,9 +78,6 @@ pub enum Expression {
         constructor: Box<Expression>,
         appends: Vec<DictAppend>,
     },
-    Tuple {
-        exprs: Vec<Expression>,
-    },
     Variable {
         name: Str,
     },

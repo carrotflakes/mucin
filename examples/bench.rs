@@ -2,7 +2,6 @@ use mucin::runtime::Runtime;
 
 fn main() {
     let t = std::time::Instant::now();
-
     for _ in 0..10 {
         #[allow(unused)]
         enum Tree {
@@ -20,21 +19,27 @@ fn main() {
 
         std::hint::black_box(f(20));
     }
-
     println!("{:?}", t.elapsed());
 
     let t = std::time::Instant::now();
-
     for _ in 0..10 {
         let mut runtime = Runtime::new();
-        runtime.push_env_from_src(SRC).unwrap();
+        runtime.push_env_from_src(SRC1).unwrap();
+        // runtime.get_value("f", |mv, f| {dbg!(&f.as_closure().unwrap().function.body);});
         runtime.call_fn("main", |_| vec![], |_, _| {}).unwrap();
     }
+    println!("{:?}", t.elapsed());
 
+    let t = std::time::Instant::now();
+    for _ in 0..10 {
+        let mut runtime = Runtime::new();
+        runtime.push_env_from_src(SRC2).unwrap();
+        runtime.call_fn("main", |_| vec![], |_, _| {}).unwrap();
+    }
     println!("{:?}", t.elapsed());
 }
 
-const SRC: &str = r#"
+const SRC1: &str = r#"
 fn main(): f(20)
 
 fn f(i):
@@ -45,4 +50,14 @@ fn f(i):
             left: f(i - 1),
             right: f(i - 1),
         }
+"#;
+
+const SRC2: &str = r#"
+fn main(): f(20)
+
+fn f(i):
+    if i == 0:
+        ()
+    else:
+        [f(i - 1), f(i - 1)]
 "#;

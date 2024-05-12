@@ -122,11 +122,6 @@ impl FunctionEnv {
                     }
                 }
             }
-            model::Expression::Tuple { exprs } => {
-                for expr in exprs {
-                    self.expression(expr);
-                }
-            }
             model::Expression::Variable { name } => {
                 self.add_variable(name.clone());
             }

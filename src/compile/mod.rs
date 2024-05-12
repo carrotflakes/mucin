@@ -61,7 +61,7 @@ pub enum Instruction<'gc> {
     JumpIfNot(usize),
 
     MakeClosure(Gc<'gc, Function<'gc>>),
-    MakeTuple(usize),
+    MakePair,
     MakeVec(usize),
     MakeVecWithUnpack(usize),
     MakeDict(usize),
@@ -105,7 +105,7 @@ impl<'gc> std::fmt::Debug for Instruction<'gc> {
             Instruction::MakeClosure(c) => write!(f, "make_closure {:#?}", c),
             Instruction::MakeVec(size) => write!(f, "make_vec {}", size),
             Instruction::MakeVecWithUnpack(size) => write!(f, "make_vec_with_unpack {}", size),
-            Instruction::MakeTuple(size) => write!(f, "make_tuple {}", size),
+            Instruction::MakePair => write!(f, "make_pair"),
             Instruction::MakeDict(size) => write!(f, "make_dict {}", size),
             Instruction::MakeStruct(size) => write!(f, "make_struct {}", size),
         }

@@ -445,7 +445,6 @@ fn factor<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
         closure,
         vec,
         dict,
-        tuple,
         map(literal, |value| Expression::Literal { value }),
         map(identifier, |name| Expression::Variable { name }),
         cond_if,
@@ -796,24 +795,6 @@ fn dict_append<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], DictAppend> {
             Ok((i, DictAppend::Spread(expr)))
         },
     ))(i)
-}
-
-fn tuple<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
-    let (i, _) = paren('(')(i)?;
-    let (i, exprs) = separated_list0(op(","), control)(i)?;
-
-    if exprs.is_empty() {
-        return fail(i);
-    }
-
-    let (i, _) = if exprs.len() == 1 {
-        let (i, _) = op(",")(i)?;
-        (i, ())
-    } else {
-        (i, ())
-    };
-    let (i, _) = paren(')')(i)?;
-    Ok((i, Expression::Tuple { exprs }))
 }
 
 fn literal<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Literal> {

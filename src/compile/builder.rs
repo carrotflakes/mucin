@@ -490,7 +490,7 @@ impl<'gc> Builder<'gc> {
                                 .push(Instruction::Push(Box::new(Value::String(name.clone()))));
                             self.stack_size += 1;
                             self.build_expression(expr)?;
-                            self.instructions.push(Instruction::MakeTuple(2));
+                            self.instructions.push(Instruction::MakePair);
                             self.stack_size -= 1;
                         }
                         model::DictAppend::Spread(expr) => {
@@ -513,7 +513,7 @@ impl<'gc> Builder<'gc> {
                                 .push(Instruction::Push(Box::new(Value::String(name.clone()))));
                             self.stack_size += 1;
                             self.build_expression(expr)?;
-                            self.instructions.push(Instruction::MakeTuple(2));
+                            self.instructions.push(Instruction::MakePair);
                             self.stack_size -= 1;
                         }
                         model::DictAppend::Spread(expr) => {
@@ -525,13 +525,6 @@ impl<'gc> Builder<'gc> {
                 self.instructions
                     .push(Instruction::MakeStruct(appends.len()));
                 self.stack_size -= appends.len();
-            }
-            model::Expression::Tuple { exprs } => {
-                for expr in exprs {
-                    self.build_expression(expr)?;
-                }
-                self.instructions.push(Instruction::MakeTuple(exprs.len()));
-                self.stack_size -= exprs.len() - 1;
             }
             model::Expression::Variable { name } => match self.resolve_variable(name) {
                 Some((i1, i2, _)) => {
@@ -777,10 +770,11 @@ impl<'gc> Builder<'gc> {
             match append {
                 model::VecAppend::Element(ee) => {
                     self.build_expression(ee)?;
-                    self.instructions.push(Instruction::MakeTuple(1));
                 }
                 model::VecAppend::Spread(ve) => {
                     self.build_expression(ve)?;
+                    self.instructions.push(Instruction::PushUnit);
+                    self.instructions.push(Instruction::MakePair);
                 }
             }
         })

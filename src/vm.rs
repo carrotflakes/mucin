@@ -139,10 +139,12 @@ impl<'gc> Vm<'gc> {
                     let f = self.values.pop().unwrap();
                     let base_len = self.values.len() - len;
                     for v in self.values.split_off(base_len) {
-                        match &v {
-                            Value::Tuple(e) if e.len() == 1 => self.values.push(e[0].clone()),
-                            Value::Vec(v) => self.values.extend(v.borrow().clone()),
-                            _ => panic!("unexpected value"),
+                        match v {
+                            Value::Pair(e) => match e[0] {
+                                Value::Vec(v) => self.values.extend(v.borrow().clone()),
+                                _ => unreachable!(),
+                            },
+                            e => self.values.push(e),
                         }
                     }
                     self.call(f, self.values.len() - base_len)?;
@@ -248,25 +250,30 @@ impl<'gc> Vm<'gc> {
                 Instruction::MakeVecWithUnpack(len) => {
                     let mut vec = Vec::with_capacity(*len);
                     for v in self.values.split_off(self.values.len() - *len) {
-                        match &v {
-                            Value::Tuple(e) if e.len() == 1 => vec.push(e[0].clone()),
-                            Value::Vec(v) => vec.extend(v.borrow().clone()),
-                            _ => panic!("unexpected value"),
+                        match v {
+                            Value::Pair(e) => match e[0] {
+                                Value::Vec(v) => vec.extend(v.borrow().clone()),
+                                _ => unreachable!(),
+                            },
+                            e => vec.push(e),
                         }
                     }
                     self.values
                         .push(Value::Vec(Gc::new(self.mc, RefLock::new(vec))));
                 }
-                Instruction::MakeTuple(len) => {
-                    let values = self.values.split_off(self.values.len() - *len);
-                    self.values.push(Value::Tuple(values.into_boxed_slice()));
+                Instruction::MakePair => {
+                    let values = self.values.split_off(self.values.len() - 2);
+                    self.values.push(Value::Pair(values.into_boxed_slice()));
+                    // let mut values = [self.values.pop().unwrap(),self.values.pop().unwrap()];
+                    // values.reverse();
+                    // self.values.push(Value::Pair(Box::new(values)));
                 }
                 Instruction::MakeDict(len) => {
                     let mut fields = vec![];
                     let appends = self.values.split_off(self.values.len() - *len);
                     for append in appends.into_iter().rev() {
-                        match &append {
-                            Value::Tuple(kv) if kv.len() == 2 => {
+                        match append {
+                            Value::Pair(kv) => {
                                 fields.push((kv[0].as_string().unwrap().clone(), kv[1].clone()));
                             }
                             Value::Dict(dict_) => {
@@ -289,8 +296,8 @@ impl<'gc> Vm<'gc> {
                     let mut fields = vec![];
                     let appends = self.values.split_off(self.values.len() - *len);
                     for append in appends.into_iter().rev() {
-                        match &append {
-                            Value::Tuple(kv) if kv.len() == 2 => {
+                        match append {
+                            Value::Pair(kv) => {
                                 fields.push((kv[0].as_string().unwrap().clone(), kv[1].clone()));
                             }
                             Value::Dict(dict_) => {

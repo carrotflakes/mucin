@@ -8,7 +8,7 @@ use crate::{
 
 pub fn types<'gc>(mc: &Mutation<'gc>) -> Vec<(Str, Value<'gc>)> {
     [
-        "unit", "null", "int", "float", "string", "bool", "tuple", "vec", "dict", "any", "closure",
+        "unit", "null", "int", "float", "string", "bool", "pair", "vec", "dict", "any", "closure",
         "nativeFn",
     ]
     .into_iter()
@@ -178,7 +178,7 @@ pub fn nf_typeof<'gc>(_mc: &Mutation<'gc>, args: &[Value<'gc>]) -> Result<Value<
         Value::Float(_) => Value::String(intern("float")),
         Value::String(_) => Value::String(intern("string")),
         Value::Bool(_) => Value::String(intern("bool")),
-        Value::Tuple(_) => Value::String(intern("tuple")),
+        Value::Pair(_) => Value::String(intern("pair")),
         Value::Vec(_) => Value::String(intern("vec")),
         Value::Dict(_) => Value::String(intern("dict")),
         Value::StructType(_) => Value::String(intern("structType")),
@@ -209,7 +209,7 @@ fn nf_struct_type_methods<'gc>(
 
 fn nf_index<'gc>(_: &Mutation, values: &[Value<'gc>]) -> Result<Value<'gc>, String> {
     Ok(match &values[0] {
-        Value::Tuple(t) => match &values[1] {
+        Value::Pair(t) => match &values[1] {
             Value::Int(i) => t[*i as usize].clone(),
             _ => return Err(format!("indexing with non-integer value: {:?}", values[1])),
         },
