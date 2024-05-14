@@ -3,7 +3,7 @@ use std::sync::Arc;
 use gc_arena::{lock::RefLock, Arena, Collect, Gc, Mutation, Rootable};
 
 use crate::{
-    compile, native_fns, parser,
+    compile, continuation, native_fns, parser,
     string::{compact_str_pool, intern},
     value::{Closure, Dict, Struct, StructType, Value},
     vm::{Env, Vm},
@@ -17,10 +17,16 @@ impl Runtime {
             let mut inner = RuntimeInner::new(mc);
 
             inner.push_env(mc, |_| {
-                native_fns::std()
+                let mut v: Vec<_> = native_fns::std()
                     .into_iter()
                     .map(|(k, v)| ((k, false), v))
-                    .collect()
+                    .collect();
+                v.push((
+                    (intern("calljp"), false),
+                    Value::VmFn(&continuation::VF_CALLJP),
+                ));
+                v.push(((intern("jump"), false), Value::VmFn(&continuation::VF_JUMP)));
+                v
             });
             let env = inner.push_env_from_src(mc, SRC).unwrap();
             inner.method_call_fn = env

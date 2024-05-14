@@ -10,10 +10,10 @@ pub type Env<'gc> = Gc<'gc, RefLock<Struct<'gc>>>;
 
 #[derive(Clone)]
 pub struct Vm<'gc> {
-    mc: &'gc Mutation<'gc>,
-    frames: Vec<(Gc<'gc, Function<'gc>>, usize, Vec<Env<'gc>>)>,
-    values: Vec<Value<'gc>>,
-    strict_arity: bool,
+    pub mc: &'gc Mutation<'gc>,
+    pub frames: Vec<(Gc<'gc, Function<'gc>>, usize, Vec<Env<'gc>>)>,
+    pub values: Vec<Value<'gc>>,
+    pub strict_arity: bool,
 }
 
 impl<'gc> Vm<'gc> {
@@ -332,7 +332,7 @@ impl<'gc> Vm<'gc> {
         Ok(self.values.pop().unwrap())
     }
 
-    fn call(&mut self, f: Value<'gc>, args_len: usize) -> Result<(), String> {
+    pub fn call(&mut self, f: Value<'gc>, args_len: usize) -> Result<(), String> {
         match f {
             Value::NativeFn(nf) => {
                 self.resize_args("nativeFn", nf.arity, args_len);
@@ -359,6 +359,11 @@ impl<'gc> Vm<'gc> {
                     }),
                 ));
                 self.frames.push((closure.function.clone(), 0, envs));
+            }
+            Value::VmFn(vf) => {
+                self.resize_args("vmFn", vf.arity, args_len);
+                let f = vf.function;
+                return f(self);
             }
             callee => return Err(format!("expected function, got {:?}", callee)),
         }

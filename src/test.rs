@@ -250,7 +250,8 @@ fn main() {
 "#,
         r#"
 fn main() 1 + 2 - 3 * 4 % 5
-"#,     r#"
+"#,
+        r#"
 fn main() {
     var a = 1;
     a -= 2;
@@ -259,7 +260,7 @@ fn main() {
     [a, b]
 }
 "#,
-r#"
+        r#"
 fn main() {
     let a = [1, 2, 3];
     a.push(4);
@@ -269,20 +270,20 @@ fn main() {
     a
 }
 "#,
-r#"
+        r#"
 // Non-strict arity check
 fn main() {
     [[1, 2, 3].map(|x| x + 1), [1, 2, 3].map(|x, i, y| i)]
 }
 "#,
-r#"
+        r#"
 fn main() [1, ..[2, 3], 4, ..[5, 6]]
 "#,
-r#"
+        r#"
 fn main() f(1, ..[2, 3], 4, ..[5, 6])
 fn f(a, b, c, d, e, f) [a, b, c, d, e, f]
 "#,
-r#"
+        r#"
 let a = [];
 fn main() {f(); a}
 fn f() {
@@ -298,7 +299,7 @@ fn f() {
     a.push(4);
 }
 "#,
-r#"
+        r#"
 fn main() {
     var i = 0;
     let a = [];
@@ -309,7 +310,7 @@ fn main() {
     a
 }
 "#,
-r#"
+        r#"
 macro! foo {
     $body => {
         var x = 0;
@@ -326,7 +327,7 @@ fn main() {
     x
 }
 "#,
-r#"
+        r#"
 macro! foo {
     ($($x)*) => {
         [$({let $y = $x; $y },)]

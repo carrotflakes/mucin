@@ -184,8 +184,10 @@ pub fn nf_typeof<'gc>(_mc: &Mutation<'gc>, args: &[Value<'gc>]) -> Result<Value<
         Value::StructType(_) => Value::String(intern("structType")),
         Value::Struct(_) => Value::String(intern("struct")),
         Value::Any(_) => Value::String(intern("any")),
+        Value::AnyMut(_) => Value::String(intern("anyMut")),
         Value::Closure(_) => Value::String(intern("closure")),
         Value::NativeFn(_) => Value::String(intern("nativeFn")),
+        Value::VmFn(_) => Value::String(intern("vmFn")),
     })
 }
 

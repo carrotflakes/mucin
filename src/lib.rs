@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod compile;
+pub mod continuation;
 pub mod macros;
 pub mod multi_file_builder;
 pub mod native_fns;

@@ -26,10 +26,12 @@ pub enum Value<'gc> {
     StructType(Gc<'gc, StructType<'gc>>),
     Struct(Gc<'gc, RefLock<Struct<'gc>>>),
 
-    Any(#[collect(require_static)] Arc<Mutex<dyn std::any::Any>>),
+    Any(#[collect(require_static)] Arc<dyn std::any::Any>),
+    AnyMut(#[collect(require_static)] Arc<Mutex<dyn std::any::Any>>),
 
     Closure(Closure<'gc>),
     NativeFn(&'static NativeFn),
+    VmFn(&'static VmFn),
 }
 
 #[derive(Collect, Debug, Clone)]
@@ -56,6 +58,12 @@ pub struct StructType<'gc> {
 pub struct Struct<'gc> {
     pub struct_type: Gc<'gc, StructType<'gc>>,
     pub values: Box<[Value<'gc>]>,
+}
+
+#[derive(Debug)]
+pub struct VmFn {
+    pub arity: usize,
+    pub function: for<'gc> fn(&mut crate::vm::Vm<'gc>) -> Result<(), String>,
 }
 
 impl<'gc> Value<'gc> {
@@ -123,9 +131,16 @@ impl<'gc> Value<'gc> {
         }
     }
 
-    pub fn as_any(&self) -> Option<&Arc<Mutex<dyn std::any::Any>>> {
+    pub fn as_any(&self) -> Option<&Arc<dyn std::any::Any>> {
         match self {
             Value::Any(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    pub fn as_any_mut(&self) -> Option<&Arc<Mutex<dyn std::any::Any>>> {
+        match self {
+            Value::AnyMut(value) => Some(value),
             _ => None,
         }
     }
@@ -266,11 +281,13 @@ impl<'gc> PartialEq for Value<'gc> {
             (Value::StructType(left), Value::StructType(right)) => Gc::ptr_eq(*left, *right),
             (Value::Struct(left), Value::Struct(right)) => Gc::ptr_eq(*left, *right),
             (Value::Any(left), Value::Any(right)) => Arc::ptr_eq(left, right),
+            (Value::AnyMut(left), Value::AnyMut(right)) => Arc::ptr_eq(left, right),
 
-            (Value::NativeFn(left), Value::NativeFn(right)) => left.function == right.function,
             (Value::Closure(left), Value::Closure(right)) => {
                 Gc::ptr_eq(left.function, right.function)
             }
+            (Value::NativeFn(left), Value::NativeFn(right)) => left.function == right.function,
+            (Value::VmFn(left), Value::VmFn(right)) => left.function == right.function,
             _ => false,
         }
     }
@@ -291,8 +308,10 @@ impl<'gc> std::fmt::Debug for Value<'gc> {
             Value::StructType(struct_type) => write!(f, "{:?}", &struct_type.fields),
             Value::Struct(struct_) => write!(f, "{:?}", &struct_.as_ref().borrow().values),
             Value::Any(_) => write!(f, "<any>"),
+            Value::AnyMut(_) => write!(f, "<any_mut>"),
             Value::Closure(closure) => write!(f, "<closure {:?}>", closure),
             Value::NativeFn(_) => write!(f, "<native_fn>"),
+            Value::VmFn(_) => write!(f, "<vm_fn>"),
         }
     }
 }
@@ -334,6 +353,7 @@ impl<'gc> std::fmt::Display for Value<'gc> {
                 write!(f, "{}", struct_)
             }
             Value::Any(_) => write!(f, "<any>"),
+            Value::AnyMut(_) => write!(f, "<any_mut>"),
             Value::Closure(c) => {
                 if c.function.name.is_empty() {
                     write!(f, "<closure>")
@@ -342,6 +362,7 @@ impl<'gc> std::fmt::Display for Value<'gc> {
                 }
             }
             Value::NativeFn(_) => write!(f, "<native_fn>"),
+            Value::VmFn(_) => write!(f, "<vm_fn>"),
         }
     }
 }
