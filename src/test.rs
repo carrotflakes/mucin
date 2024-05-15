@@ -352,15 +352,24 @@ fn main() {
 "#,
         r#"
 fn main() {
-  let a = [];
-  var i = 0;
-  for x in || { i += 1; i } {
-    if x > 10 {
-      break;
+    let a = [];
+    for x in range(10) {
+        a.push(x);
     };
-    a.push(x);
-  };
-  a
+    a
+}
+
+fn range(n) {
+    var i = 0;
+    || {
+        if i < n {
+            let x = i;
+            i += 1;
+            x
+        } else {
+            null
+        }
+    }
 }
 "#,
     ];
