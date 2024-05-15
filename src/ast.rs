@@ -161,16 +161,3 @@ pub enum Literal {
     String(Str),
     Bool(bool),
 }
-
-impl std::fmt::Display for Literal {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Literal::Unit => write!(f, "()"),
-            Literal::Null => write!(f, "null"),
-            Literal::Int(i) => write!(f, "{}", i),
-            Literal::Float(fl) => write!(f, "{}", fl),
-            Literal::String(s) => write!(f, "{:?}", s),
-            Literal::Bool(b) => write!(f, "{}", b),
-        }
-    }
-}
