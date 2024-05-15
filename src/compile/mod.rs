@@ -98,9 +98,9 @@ impl<'gc> std::fmt::Debug for Instruction<'gc> {
             Instruction::Ne => write!(f, "ne"),
             Instruction::Gt => write!(f, "gt"),
             Instruction::Ge => write!(f, "ge"),
-            Instruction::Jump(offset) => write!(f, "jump {}", offset),
-            Instruction::JumpIf(offset) => write!(f, "jump_if {}", offset),
-            Instruction::JumpIfNot(offset) => write!(f, "jump_if_not {}", offset),
+            Instruction::Jump(index) => write!(f, "jump {}", index),
+            Instruction::JumpIf(index) => write!(f, "jump_if {}", index),
+            Instruction::JumpIfNot(index) => write!(f, "jump_if_not {}", index),
 
             Instruction::MakeClosure(c) => write!(f, "make_closure {:#?}", c),
             Instruction::MakeVec(size) => write!(f, "make_vec {}", size),
