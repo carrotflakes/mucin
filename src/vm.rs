@@ -11,9 +11,16 @@ pub type Env<'gc> = Gc<'gc, RefLock<Struct<'gc>>>;
 #[derive(Clone)]
 pub struct Vm<'gc> {
     pub mc: &'gc Mutation<'gc>,
-    pub frames: Vec<(Gc<'gc, Function<'gc>>, usize, Vec<Env<'gc>>)>,
+    pub frames: Vec<Frame<'gc>>,
     pub values: Vec<Value<'gc>>,
     pub strict_arity: bool,
+}
+
+#[derive(Clone)]
+pub struct Frame<'gc> {
+    function: Gc<'gc, Function<'gc>>,
+    pc: usize,
+    envs: Vec<Env<'gc>>,
 }
 
 impl<'gc> Vm<'gc> {
@@ -85,7 +92,11 @@ impl<'gc> Vm<'gc> {
         function: Gc<'gc, Function<'gc>>,
         envs: Vec<Env<'gc>>,
     ) -> Result<Value<'gc>, String> {
-        self.frames.push((function, 0, envs));
+        self.frames.push(Frame {
+            function,
+            pc: 0,
+            envs,
+        });
         match self.run_loop() {
             Ok(v) => Ok(v),
             Err(err) => Err([err]
@@ -93,7 +104,7 @@ impl<'gc> Vm<'gc> {
                 .chain(
                     self.frames
                         .iter()
-                        .map(|(f, pc, _)| format!("{:?} [{}]", &f.name, pc)),
+                        .map(|f| format!("{:?} [{}]", &f.function.name, f.pc)),
                 )
                 .collect::<Vec<_>>()
                 .join("\n")),
@@ -101,7 +112,7 @@ impl<'gc> Vm<'gc> {
     }
 
     fn run_loop(&mut self) -> Result<Value<'gc>, String> {
-        while let Some((function, pc, envs)) = self.frames.last_mut() {
+        while let Some(Frame { function, pc, envs }) = self.frames.last_mut() {
             #[cfg(debug_assertions)]
             if *pc >= function.body.len() {
                 println!("function: {:?}", function);
@@ -220,18 +231,18 @@ impl<'gc> Vm<'gc> {
                     self.values.push(left.ge(&right)?);
                 }
                 Instruction::Jump(pc) => {
-                    self.frames.last_mut().unwrap().1 = *pc;
+                    self.frames.last_mut().unwrap().pc = *pc;
                 }
                 Instruction::JumpIf(pc) => {
                     let condition = self.values.pop().unwrap();
                     if condition.is_truthy() {
-                        self.frames.last_mut().unwrap().1 = *pc;
+                        self.frames.last_mut().unwrap().pc = *pc;
                     }
                 }
                 Instruction::JumpIfNot(pc) => {
                     let condition = self.values.pop().unwrap();
                     if !condition.is_truthy() {
-                        self.frames.last_mut().unwrap().1 = *pc;
+                        self.frames.last_mut().unwrap().pc = *pc;
                     }
                 }
 
@@ -358,7 +369,11 @@ impl<'gc> Vm<'gc> {
                         values: env,
                     }),
                 ));
-                self.frames.push((closure.function.clone(), 0, envs));
+                self.frames.push(Frame {
+                    function: closure.function.clone(),
+                    pc: 0,
+                    envs,
+                });
             }
             Value::VmFn(vf) => {
                 self.resize_args("vmFn", vf.arity, args_len);
