@@ -263,122 +263,6 @@ impl<'gc> Builder<'gc> {
     }
 
     #[must_use]
-    fn build_block(&mut self, block: &ast::Block) -> Result<()> {
-        let ss = self.stack_size;
-
-        for statement in &block.statements {
-            match statement {
-                ast::Statement::Let {
-                    name,
-                    mutable,
-                    expr,
-                } => {
-                    self.build_expression(expr)?;
-                    self.add_var(name.clone(), *mutable);
-                    let index = self.resolve_variable(name).unwrap();
-                    self.instructions
-                        .push(Instruction::Store(index.0 as u16, index.1 as u16));
-                    self.stack_size -= 1;
-                }
-                ast::Statement::Expression { expr } => {
-                    self.build_expression(expr)?;
-                    self.instructions.push(Instruction::Pop);
-                    self.stack_size -= 1;
-                }
-                ast::Statement::Assign { name, expr, op } => {
-                    let index = self.resolve_variable(name).unwrap();
-                    if !index.2 {
-                        return Err(Error::String(format!("variable is not mutable: {}", name)));
-                    }
-
-                    if let Some(op) = op {
-                        // Assign with operation
-                        self.instructions
-                            .push(Instruction::Load(index.0 as u16, index.1 as u16));
-                        self.stack_size += 1;
-                        self.build_expression(expr)?;
-                        match op.as_str() {
-                            "__add" => self.instructions.push(Instruction::Add),
-                            "__sub" => self.instructions.push(Instruction::Sub),
-                            "__mul" => self.instructions.push(Instruction::Mul),
-                            "__div" => self.instructions.push(Instruction::Div),
-                            "__rem" => self.instructions.push(Instruction::Rem),
-                            _ => unreachable!(),
-                        }
-                        self.stack_size -= 1;
-                    } else {
-                        self.build_expression(expr)?;
-                    }
-
-                    self.instructions
-                        .push(Instruction::Store(index.0 as u16, index.1 as u16));
-                    self.stack_size -= 1;
-                }
-                ast::Statement::FieldAssign {
-                    dict,
-                    field,
-                    expr,
-                    op,
-                } => {
-                    self.build_expression(dict)?;
-
-                    if let Some(op) = op {
-                        // Assign with operation
-                        self.instructions.push(Instruction::Dup);
-                        self.stack_size += 1;
-                        self.build_expression(field)?;
-                        if let ast::Expression::Literal { value: _ } = field {
-                            self.instructions.push(Instruction::CallNative(&NF_INDEX));
-                            self.stack_size -= 1;
-                            self.build_expression(field)?;
-                        } else {
-                            self.instructions.push(Instruction::Dup);
-                            let index = self.add_var(intern(""), false);
-                            self.instructions.push(Instruction::Store(index.0, index.1));
-                            self.instructions.push(Instruction::CallNative(&NF_INDEX));
-                            self.instructions.push(Instruction::Load(index.0, index.1));
-                        }
-                        self.instructions.push(Instruction::Swap);
-
-                        self.build_expression(expr)?;
-                        match op.as_str() {
-                            "__add" => self.instructions.push(Instruction::Add),
-                            "__sub" => self.instructions.push(Instruction::Sub),
-                            "__mul" => self.instructions.push(Instruction::Mul),
-                            "__div" => self.instructions.push(Instruction::Div),
-                            "__rem" => self.instructions.push(Instruction::Rem),
-                            _ => unreachable!(),
-                        }
-                        self.stack_size -= 1;
-                    } else {
-                        self.build_expression(field)?;
-                        self.build_expression(expr)?;
-                    }
-
-                    self.instructions
-                        .push(Instruction::CallNative(&NF_FIELD_ASSIGN));
-                    self.instructions.push(Instruction::Pop);
-                    self.stack_size -= 3;
-                }
-                ast::Statement::Defer { expr } => {
-                    self.defered
-                        .push((expr.clone(), self.envs.last().unwrap().len()));
-                }
-            }
-
-            assert_eq!(ss, self.stack_size);
-        }
-
-        if let Some(expr) = &block.expr {
-            self.build_expression(expr)
-        } else {
-            self.instructions.push(Instruction::PushUnit);
-            self.stack_size += 1;
-            Ok(())
-        }
-    }
-
-    #[must_use]
     fn build_expression(&mut self, expression: &ast::Expression) -> Result<()> {
         match expression {
             ast::Expression::Op { name, args } => {
@@ -413,46 +297,47 @@ impl<'gc> Builder<'gc> {
                     return Ok(());
                 }
 
-                if name.as_str() == "__or" || name.as_str() == "__and" {
-                    self.build_expression(&args[0])?;
-                    let stack_size = self.stack_size;
+                match name.as_str() {
+                    "__or" | "__and" => {
+                        self.build_expression(&args[0])?;
+                        let stack_size = self.stack_size;
 
-                    self.instructions.push(Instruction::Dup);
-                    let jump_index = self.instructions.len();
-                    self.instructions.push(Instruction::PushUnit);
-                    self.instructions.push(Instruction::Pop);
+                        self.instructions.push(Instruction::Dup);
+                        let jump_index = self.instructions.len();
+                        self.instructions.push(Instruction::PushUnit);
+                        self.instructions.push(Instruction::Pop);
 
-                    let env_len = self.envs.last().unwrap().len();
-                    match self.build_expression(&args[1]) {
-                        Ok(()) => {}
-                        Err(Error::Break) => {}
-                        Err(Error::Return) => {}
-                        err @ Err(Error::String(_)) => return err,
+                        match self.build_expression(&args[1]) {
+                            Ok(()) => {}
+                            Err(Error::Break) => {}
+                            Err(Error::Return) => {}
+                            err @ Err(Error::String(_)) => return err,
+                        }
+
+                        self.instructions[jump_index] = if name.as_str() == "__or" {
+                            Instruction::JumpIf(self.instructions_offset + self.instructions.len())
+                        } else {
+                            Instruction::JumpIfNot(
+                                self.instructions_offset + self.instructions.len(),
+                            )
+                        };
+
+                        self.stack_size = stack_size;
+
+                        return Ok(());
                     }
-
-                    self.instructions[jump_index] = if name.as_str() == "__or" {
-                        Instruction::JumpIf(self.instructions_offset + self.instructions.len())
-                    } else {
-                        Instruction::JumpIfNot(self.instructions_offset + self.instructions.len())
-                    };
-
-                    self.stack_size = stack_size;
-                    self.envs.last_mut().unwrap()[env_len..].fill_with(|| (intern(""), false));
-
-                    return Ok(());
+                    "__index" => {
+                        for arg in args {
+                            self.build_expression(arg)?;
+                        }
+                        self.instructions.push(Instruction::CallNative(&NF_INDEX));
+                        self.stack_size -= args.len() - 1;
+                        return Ok(());
+                    }
+                    _ => {
+                        unreachable!("unknown operator: {}", name);
+                    }
                 }
-
-                for arg in args {
-                    self.build_expression(arg)?;
-                }
-
-                if name.as_str() == "__index" {
-                    self.instructions.push(Instruction::CallNative(&NF_INDEX));
-                    self.stack_size -= args.len() - 1;
-                    return Ok(());
-                }
-
-                unreachable!("unknown operator: {}", name);
             }
             ast::Expression::Call { callee, args } => {
                 let ss = self.stack_size;
@@ -742,6 +627,122 @@ impl<'gc> Builder<'gc> {
             }
         }
         Ok(())
+    }
+
+    #[must_use]
+    fn build_block(&mut self, block: &ast::Block) -> Result<()> {
+        let ss = self.stack_size;
+
+        for statement in &block.statements {
+            match statement {
+                ast::Statement::Let {
+                    name,
+                    mutable,
+                    expr,
+                } => {
+                    self.build_expression(expr)?;
+                    self.add_var(name.clone(), *mutable);
+                    let index = self.resolve_variable(name).unwrap();
+                    self.instructions
+                        .push(Instruction::Store(index.0 as u16, index.1 as u16));
+                    self.stack_size -= 1;
+                }
+                ast::Statement::Expression { expr } => {
+                    self.build_expression(expr)?;
+                    self.instructions.push(Instruction::Pop);
+                    self.stack_size -= 1;
+                }
+                ast::Statement::Assign { name, expr, op } => {
+                    let index = self.resolve_variable(name).unwrap();
+                    if !index.2 {
+                        return Err(Error::String(format!("variable is not mutable: {}", name)));
+                    }
+
+                    if let Some(op) = op {
+                        // Assign with operation
+                        self.instructions
+                            .push(Instruction::Load(index.0 as u16, index.1 as u16));
+                        self.stack_size += 1;
+                        self.build_expression(expr)?;
+                        match op.as_str() {
+                            "__add" => self.instructions.push(Instruction::Add),
+                            "__sub" => self.instructions.push(Instruction::Sub),
+                            "__mul" => self.instructions.push(Instruction::Mul),
+                            "__div" => self.instructions.push(Instruction::Div),
+                            "__rem" => self.instructions.push(Instruction::Rem),
+                            _ => unreachable!(),
+                        }
+                        self.stack_size -= 1;
+                    } else {
+                        self.build_expression(expr)?;
+                    }
+
+                    self.instructions
+                        .push(Instruction::Store(index.0 as u16, index.1 as u16));
+                    self.stack_size -= 1;
+                }
+                ast::Statement::FieldAssign {
+                    dict,
+                    field,
+                    expr,
+                    op,
+                } => {
+                    self.build_expression(dict)?;
+
+                    if let Some(op) = op {
+                        // Assign with operation
+                        self.instructions.push(Instruction::Dup);
+                        self.stack_size += 1;
+                        self.build_expression(field)?;
+                        if let ast::Expression::Literal { value: _ } = field {
+                            self.instructions.push(Instruction::CallNative(&NF_INDEX));
+                            self.stack_size -= 1;
+                            self.build_expression(field)?;
+                        } else {
+                            self.instructions.push(Instruction::Dup);
+                            let index = self.add_var(intern(""), false);
+                            self.instructions.push(Instruction::Store(index.0, index.1));
+                            self.instructions.push(Instruction::CallNative(&NF_INDEX));
+                            self.instructions.push(Instruction::Load(index.0, index.1));
+                        }
+                        self.instructions.push(Instruction::Swap);
+
+                        self.build_expression(expr)?;
+                        match op.as_str() {
+                            "__add" => self.instructions.push(Instruction::Add),
+                            "__sub" => self.instructions.push(Instruction::Sub),
+                            "__mul" => self.instructions.push(Instruction::Mul),
+                            "__div" => self.instructions.push(Instruction::Div),
+                            "__rem" => self.instructions.push(Instruction::Rem),
+                            _ => unreachable!(),
+                        }
+                        self.stack_size -= 1;
+                    } else {
+                        self.build_expression(field)?;
+                        self.build_expression(expr)?;
+                    }
+
+                    self.instructions
+                        .push(Instruction::CallNative(&NF_FIELD_ASSIGN));
+                    self.instructions.push(Instruction::Pop);
+                    self.stack_size -= 3;
+                }
+                ast::Statement::Defer { expr } => {
+                    self.defered
+                        .push((expr.clone(), self.envs.last().unwrap().len()));
+                }
+            }
+
+            assert_eq!(ss, self.stack_size);
+        }
+
+        if let Some(expr) = &block.expr {
+            self.build_expression(expr)
+        } else {
+            self.instructions.push(Instruction::PushUnit);
+            self.stack_size += 1;
+            Ok(())
+        }
     }
 
     #[must_use]
