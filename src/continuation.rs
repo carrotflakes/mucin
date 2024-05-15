@@ -22,12 +22,13 @@ fn vf_calljp<'gc>(vm: &mut Vm<'gc>) -> Result<(), String> {
 }
 
 fn vf_jump<'gc>(vm: &mut Vm<'gc>) -> Result<(), String> {
+    let retval = vm.values.pop().unwrap();
     let jp = vm.values.pop().unwrap();
     if let Some(any) = jp.as_any() {
         if let Some(jp) = any.downcast_ref::<JumpPoint>() {
             vm.frames.truncate(jp.frame_index);
             vm.values.truncate(jp.value_index);
-            vm.values.push(Value::Unit);
+            vm.values.push(retval);
             return Ok(());
         }
     }
@@ -40,7 +41,7 @@ pub static VF_CALLJP: VmFn = VmFn {
 };
 
 pub static VF_JUMP: VmFn = VmFn {
-    arity: 1,
+    arity: 2,
     function: vf_jump,
 };
 
@@ -49,15 +50,20 @@ fn test() {
     let srcs = [r#"
 let a = [];
 fn main() {
-    calljp(|jp| {
+    a.push(calljp(|jp| {
         a.push(1);
         1 + jump(jp);
         a.push(2);
-    });
-    calljp(|jump| {
+    }));
+    a.push(calljp(|jp| {
         a.push(3);
-        4
-    });
+        1 + jump(jp, 5);
+        a.push(4);
+    }));
+    a.push(calljp(|jp| {
+        a.push(6);
+        7
+    }));
     a
 }"#];
     for (i, src) in srcs.iter().enumerate() {
