@@ -338,6 +338,18 @@ fn main() {
     foo!(1 2 3)
 }
 "#,
+r#"
+fn main() {
+    let a = [];
+    var i = 0;
+    while i < 5 {
+        let x = i;
+        a.push(|| x);
+        i += 1;
+    };
+    [a[0](), a[1]()]
+}
+"#
     ];
     for (i, src) in srcs.iter().enumerate() {
         println!("test {}", i);

@@ -6,7 +6,7 @@ use crate::{
     value::{Closure, Dict},
 };
 
-use self::pattern_match::convert_match;
+use self::{function_env::FunctionEnv, pattern_match::convert_match};
 
 use super::*;
 
@@ -22,7 +22,7 @@ pub enum Error {
 pub struct Builder<'gc> {
     mc: &'gc Mutation<'gc>,
     method_call_fn: Option<Closure<'gc>>,
-    envs: Vec<Vec<(Str, bool)>>,
+    envs: Vec<Vec<(Str, bool)>>, // (var_name, mutable, efemeral)
     instructions: Vec<Instruction<'gc>>,
     stack_size: usize,
     labels: Vec<Label>,
@@ -35,6 +35,7 @@ struct Label {
     name: Str,
     continue_index: usize,
     stack_size: usize,
+    envs_len: usize,
 }
 
 impl<'gc> Builder<'gc> {
@@ -188,7 +189,7 @@ impl<'gc> Builder<'gc> {
         &mut self,
         function: &ast::Function,
     ) -> std::result::Result<Function<'gc>, String> {
-        let variables = super::function_env::FunctionEnv::from_function(function);
+        let variables = super::function_env::FunctionEnv::from_function(function).into_outer_env();
 
         let mut capture_envs: Vec<_> = variables
             .iter()
@@ -493,6 +494,7 @@ impl<'gc> Builder<'gc> {
                     name: label.clone(),
                     continue_index,
                     stack_size: self.stack_size,
+                    envs_len: self.envs.len(),
                 });
                 let env_len = self.envs.last().unwrap().len();
 
@@ -527,6 +529,31 @@ impl<'gc> Builder<'gc> {
                 self.build_expression(&expr)?;
             }
             ast::Expression::Block(block) => {
+                let env_required = FunctionEnv::from_block(block).has_eternal_variable();
+                if env_required {
+                    let index = self.instructions.len();
+                    self.instructions.push(Instruction::PushUnit);
+                    let envs_len = self.envs.len();
+                    self.envs.push(vec![]);
+
+                    self.build_block(block)?;
+
+                    let env = self.envs.pop().unwrap();
+                    assert_eq!(envs_len, self.envs.len());
+                    self.instructions[index] = Instruction::PushEnv(Gc::new(
+                        self.mc,
+                        StructType {
+                            name: intern(""),
+                            fields: env.into_boxed_slice(),
+                            methods: Gc::new(self.mc, RefLock::new(Dict::default())),
+                        },
+                    ));
+                    self.instructions
+                        .push(Instruction::TruncateEnv(self.envs.len()));
+
+                    return Ok(());
+                }
+
                 let env_len = self.envs.last().unwrap().len();
 
                 let res = self.build_block(block);
@@ -575,6 +602,11 @@ impl<'gc> Builder<'gc> {
                     self.stack_size += 1;
                 };
 
+                if label.envs_len > self.envs.len() {
+                    self.instructions
+                        .push(Instruction::TruncateEnv(label.envs_len));
+                }
+
                 self.break_indexes
                     .push((label.name, self.instructions.len()));
                 self.instructions.push(Instruction::Jump(0));
@@ -600,6 +632,27 @@ impl<'gc> Builder<'gc> {
                 self.instructions
                     .push(Instruction::MakeClosure(Gc::new(self.mc, function)));
                 self.stack_size += 1;
+            }
+            ast::Expression::Env(expr) => {
+                let index = self.instructions.len();
+                self.instructions.push(Instruction::PushUnit);
+                let envs_len = self.envs.len();
+                self.envs.push(vec![]);
+
+                self.build_expression(expr)?;
+
+                let env = self.envs.pop().unwrap();
+                assert_eq!(envs_len, self.envs.len());
+                self.instructions[index] = Instruction::PushEnv(Gc::new(
+                    self.mc,
+                    StructType {
+                        name: intern(""),
+                        fields: env.into_boxed_slice(),
+                        methods: Gc::new(self.mc, RefLock::new(Dict::default())),
+                    },
+                ));
+                self.instructions
+                    .push(Instruction::TruncateEnv(self.envs.len()));
             }
             ast::Expression::StaticNativeFn { native_fn } => {
                 self.instructions
@@ -708,9 +761,7 @@ impl<'gc> Builder<'gc> {
                     self.instructions.push(Instruction::Pop);
                     self.stack_size -= 3;
                 }
-                ast::Statement::Defer { expr } => {
-                    // self.defered
-                    //     .push((expr.clone(), self.envs.last().unwrap().len()));
+                ast::Statement::Defer { expr: _ } => {
                     todo!()
                 }
             }

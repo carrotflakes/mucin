@@ -114,6 +114,8 @@ pub enum Expression {
         label: Str,
     },
     Closure(Box<Function>),
+    // Unused so far
+    Env(Box<Expression>),
     StaticNativeFn {
         native_fn: &'static crate::compile::NativeFn,
     },

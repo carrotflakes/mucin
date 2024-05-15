@@ -45,6 +45,9 @@ pub enum Instruction<'gc> {
     Call(usize),
     CallWithUnpack(usize),
 
+    PushEnv(Gc<'gc, StructType<'gc>>),
+    TruncateEnv(usize),
+
     Add,
     Sub,
     Mul,
@@ -86,6 +89,9 @@ impl<'gc> std::fmt::Debug for Instruction<'gc> {
             Instruction::CallNative(_) => write!(f, "call_native"),
             Instruction::Call(arity) => write!(f, "call {}", arity),
             Instruction::CallWithUnpack(arity) => write!(f, "call_with_unpack {}", arity),
+
+            Instruction::PushEnv(_) => write!(f, "push_env"),
+            Instruction::TruncateEnv(size) => write!(f, "truncate_env {}", size),
 
             Instruction::Add => write!(f, "add"),
             Instruction::Sub => write!(f, "sub"),

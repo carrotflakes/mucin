@@ -160,6 +160,14 @@ impl<'gc> Vm<'gc> {
                     }
                     self.call(f, self.values.len() - base_len)?;
                 }
+
+                Instruction::PushEnv(env) => {
+                    envs.push(Struct::from_type(self.mc, env.clone()));
+                }
+                Instruction::TruncateEnv(len) => {
+                    envs.truncate(*len);
+                }
+
                 Instruction::Return => {
                     self.frames.pop();
                 }
@@ -360,7 +368,7 @@ impl<'gc> Vm<'gc> {
                 for i in 0..arity {
                     env[arity - i - 1] = self.values.pop().unwrap();
                 }
-                let mut envs = Vec::with_capacity(closure.capture.len() + 1);
+                let mut envs = Vec::with_capacity(closure.capture.len() + 1); // TODO: We can expect the capacity
                 envs.extend(closure.capture.iter());
                 envs.push(Gc::new(
                     self.mc,
