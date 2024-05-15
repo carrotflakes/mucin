@@ -1,18 +1,19 @@
 use crate::{ast, string::Str};
 
 pub(super) struct FunctionEnv {
-    outer_variables: Vec<Str>,
-    inner_variables: Vec<Str>,
+    envs: Vec<Vec<Str>>,
 }
 
 impl FunctionEnv {
     pub fn from_function(function: &ast::Function) -> Vec<Str> {
         let mut env = Self {
-            outer_variables: Vec::new(),
-            inner_variables: function.args.iter().map(|arg| arg.clone()).collect(),
+            envs: vec![
+                vec![],
+                function.args.iter().map(|arg| arg.clone()).collect(),
+            ],
         };
         env.expression(&function.body);
-        env.outer_variables
+        env.envs.remove(0)
     }
 
     fn add_variable(&mut self, name: Str) {
@@ -20,45 +21,8 @@ impl FunctionEnv {
             // ignore internal variables
             return;
         }
-        if self.inner_variables.contains(&name) || self.outer_variables.contains(&name) {
-            return;
-        }
-        self.outer_variables.push(name);
-    }
-
-    fn block(&mut self, block: &ast::Block) {
-        for statement in &block.statements {
-            match statement {
-                ast::Statement::Let {
-                    name,
-                    mutable: _,
-                    expr,
-                } => {
-                    self.expression(expr);
-                    self.inner_variables.push(name.clone());
-                }
-                ast::Statement::Expression { expr } => {
-                    self.expression(expr);
-                }
-                ast::Statement::Assign { name, expr, op: _ } => {
-                    self.add_variable(name.clone());
-                    self.expression(expr);
-                }
-                ast::Statement::FieldAssign {
-                    dict,
-                    field,
-                    expr,
-                    op: _,
-                } => {
-                    self.expression(dict);
-                    self.expression(field);
-                    self.expression(expr);
-                }
-                ast::Statement::Defer { expr } => self.expression(expr),
-            }
-        }
-        if let Some(expr) = &block.expr {
-            self.expression(expr);
+        if !self.envs.iter().any(|env| env.contains(&name)) {
+            self.envs.first_mut().unwrap().push(name);
         }
     }
 
@@ -132,34 +96,27 @@ impl FunctionEnv {
                 else_,
             } => {
                 self.expression(condition);
-                let len = self.inner_variables.len();
                 self.expression(then);
-                self.inner_variables.truncate(len);
                 if let Some(else_) = else_ {
                     self.expression(else_);
-                    self.inner_variables.truncate(len);
                 }
             }
             ast::Expression::Loop { body } => {
                 self.expression(body);
             }
             ast::Expression::Labeled { label: _, body } => {
-                let len = self.inner_variables.len();
                 self.expression(body);
-                self.inner_variables.truncate(len);
             }
             ast::Expression::Block(block) => {
-                let len = self.inner_variables.len();
                 self.block(block);
-                self.inner_variables.truncate(len);
             }
             ast::Expression::Match { expr, arms } => {
                 self.expression(expr);
-                let len = self.inner_variables.len();
                 for (pat, expr) in arms {
+                    self.envs.push(vec![]);
                     self.pattern(pat);
                     self.expression(expr);
-                    self.inner_variables.truncate(len);
+                    self.envs.pop();
                 }
             }
             ast::Expression::Return { expr } => {
@@ -174,20 +131,58 @@ impl FunctionEnv {
             }
             ast::Expression::Continue { label: _ } => {}
             ast::Expression::Closure(function) => {
-                let len = self.inner_variables.len();
-                self.inner_variables.extend(function.args.iter().cloned());
+                self.envs
+                    .push(function.args.iter().map(|arg| arg.clone()).collect());
                 self.expression(&function.body);
-                self.inner_variables.truncate(len);
+                self.envs.pop();
             }
             ast::Expression::StaticNativeFn { native_fn: _ } => {}
         }
+    }
+
+    fn block(&mut self, block: &ast::Block) {
+        self.envs.push(vec![]);
+        for statement in &block.statements {
+            match statement {
+                ast::Statement::Let {
+                    name,
+                    mutable: _,
+                    expr,
+                } => {
+                    self.expression(expr);
+                    self.envs.last_mut().unwrap().push(name.clone());
+                }
+                ast::Statement::Expression { expr } => {
+                    self.expression(expr);
+                }
+                ast::Statement::Assign { name, expr, op: _ } => {
+                    self.add_variable(name.clone());
+                    self.expression(expr);
+                }
+                ast::Statement::FieldAssign {
+                    dict,
+                    field,
+                    expr,
+                    op: _,
+                } => {
+                    self.expression(dict);
+                    self.expression(field);
+                    self.expression(expr);
+                }
+                ast::Statement::Defer { expr } => self.expression(expr),
+            }
+        }
+        if let Some(expr) = &block.expr {
+            self.expression(expr);
+        }
+        self.envs.pop();
     }
 
     fn pattern(&mut self, pattern: &ast::Pattern) {
         match pattern {
             ast::Pattern::Wildcard => {}
             ast::Pattern::Variable { name, type_: _ } => {
-                self.inner_variables.push(name.clone());
+                self.envs.last_mut().unwrap().push(name.clone());
             }
             ast::Pattern::Literal(_) => {}
             ast::Pattern::Vec {
@@ -207,7 +202,7 @@ impl FunctionEnv {
                 constructor,
                 fields,
             } => {
-                self.inner_variables.push(constructor.clone());
+                self.envs.last_mut().unwrap().push(constructor.clone());
                 for (_, value) in fields {
                     self.pattern(value);
                 }
