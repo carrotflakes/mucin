@@ -2,7 +2,7 @@ use gc_arena::{lock::RefLock, Mutation};
 
 use crate::{
     native_fns::{NF_FIELD_ASSIGN, NF_INDEX, NF_STRUCT_TYPE_METHODS},
-    string::{intern, Str},
+    string::{intern, unique_str, Str},
     value::{Closure, Dict},
 };
 
@@ -488,44 +488,20 @@ impl<'gc> Builder<'gc> {
                 self.build_expression(&ast::Expression::Continue { label: intern("") })?;
             }
             ast::Expression::Labeled { label, body } => {
-                let ss = self.stack_size;
-                let continue_index = self.instructions_offset + self.instructions.len();
-                self.labels.push(Label {
-                    name: label.clone(),
-                    continue_index,
-                    stack_size: self.stack_size,
-                    envs_len: self.envs.len(),
-                });
-                let env_len = self.envs.last().unwrap().len();
-
-                match self.build_expression(body) {
-                    Ok(()) => {
-                        assert_eq!(ss, self.stack_size - 1);
-                    }
-                    Err(Error::Break) => {}
-                    err @ Err(Error::Return) => return err,
-                    err @ Err(Error::String(_)) => return err,
-                }
-
-                self.labels.pop();
-                let index_to_break = self.instructions_offset + self.instructions.len();
-                for (name, break_index) in &self.break_indexes {
-                    if name.is_empty() || name == label {
-                        assert!(matches!(
-                            self.instructions[*break_index],
-                            Instruction::Jump(0)
-                        ));
-                        self.instructions[*break_index] = Instruction::Jump(index_to_break);
-                    }
-                }
-                self.break_indexes.retain(|(name, _)| name != label);
-
-                self.stack_size = ss + 1;
-                self.envs.last_mut().unwrap()[env_len..].fill_with(|| (intern(""), false));
+                self.build_labeled(label, body)?;
             }
             ast::Expression::Match { expr, arms } => {
                 let expr = convert_match(expr.as_ref().clone(), arms.clone());
                 // dbg!(&expr);
+                self.build_expression(&expr)?;
+            }
+            ast::Expression::For {
+                variable,
+                iterable,
+                body,
+            } => {
+                let expr = convert_if_expr(iterable, variable, body);
+
                 self.build_expression(&expr)?;
             }
             ast::Expression::Block(block) => {
@@ -660,6 +636,47 @@ impl<'gc> Builder<'gc> {
                 self.stack_size += 1;
             }
         }
+        Ok(())
+    }
+
+    #[must_use]
+    fn build_labeled(
+        &mut self,
+        label: &std::sync::Arc<String>,
+        body: &ast::Expression,
+    ) -> Result<()> {
+        let ss = self.stack_size;
+        let continue_index = self.instructions_offset + self.instructions.len();
+        self.labels.push(Label {
+            name: label.clone(),
+            continue_index,
+            stack_size: self.stack_size,
+            envs_len: self.envs.len(),
+        });
+        let env_len = self.envs.last().unwrap().len();
+        match self.build_expression(body) {
+            Ok(()) => {
+                assert_eq!(ss, self.stack_size - 1);
+            }
+            Err(Error::Break) => {}
+            err @ Err(Error::Return) => return err,
+            err @ Err(Error::String(_)) => return err,
+        }
+        self.labels.pop();
+        let index_to_break = self.instructions_offset + self.instructions.len();
+        for (name, break_index) in &self.break_indexes {
+            if name.is_empty() || name == label {
+                assert!(matches!(
+                    self.instructions[*break_index],
+                    Instruction::Jump(0)
+                ));
+                self.instructions[*break_index] = Instruction::Jump(index_to_break);
+            }
+        }
+        self.break_indexes.retain(|(name, _)| name != label);
+        self.stack_size = ss + 1;
+        self.envs.last_mut().unwrap()[env_len..].fill_with(|| (intern(""), false));
+
         Ok(())
     }
 
@@ -866,6 +883,56 @@ impl<'gc> Builder<'gc> {
             })
         })
     }
+}
+
+fn convert_if_expr(
+    iterable: &Box<ast::Expression>,
+    variable: &Str,
+    body: &Box<ast::Expression>,
+) -> ast::Expression {
+    let it = unique_str("#for_it");
+
+    ast::Expression::Block(ast::Block {
+        statements: vec![
+            ast::Statement::Let {
+                name: it.clone(),
+                mutable: false,
+                expr: iterable.as_ref().clone(),
+            },
+            ast::Statement::Let {
+                name: variable.clone(),
+                mutable: true,
+                expr: ast::Expression::Literal {
+                    value: ast::Literal::Unit,
+                },
+            },
+        ],
+        expr: Some(Box::new(ast::Expression::Labeled {
+            label: intern(""),
+            body: Box::new(ast::Expression::Loop {
+                body: Box::new(ast::Expression::If {
+                    condition: Box::new(ast::Expression::Block(ast::Block {
+                        statements: vec![ast::Statement::Assign {
+                            name: variable.clone(),
+                            expr: ast::Expression::Call {
+                                callee: Box::new(ast::Expression::Variable { name: it.clone() }),
+                                args: vec![],
+                            },
+                            op: None,
+                        }],
+                        expr: Some(Box::new(ast::Expression::Variable {
+                            name: variable.clone(),
+                        })),
+                    })),
+                    then: body.clone(),
+                    else_: Some(Box::new(ast::Expression::Break {
+                        label: intern(""),
+                        expr: None,
+                    })),
+                }),
+            }),
+        })),
+    })
 }
 
 fn build_value<'gc>(value: &ast::Literal) -> Value<'gc> {

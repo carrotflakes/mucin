@@ -105,6 +105,7 @@ fn keyword(i: &str) -> IResult<&str, &str> {
             tag("loop"),
             tag("while"),
             tag("for"),
+            tag("in"),
             tag("match"),
             tag("break"),
             tag("continue"),

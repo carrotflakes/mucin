@@ -283,33 +283,33 @@ fn main() [1, ..[2, 3], 4, ..[5, 6]]
 fn main() f(1, ..[2, 3], 4, ..[5, 6])
 fn f(a, b, c, d, e, f) [a, b, c, d, e, f]
 "#,
-//         r#"
-// let a = [];
-// fn main() {f(); a}
-// fn f() {
-//     defer a.push(6);
-//     let x = 5;
-//     defer a.push(x);
-//     a.push(1);
-//     let x = 3;
-//     {
-//         defer a.push(x);
-//         a.push(2);
-//     };
-//     a.push(4);
-// }
-// "#,
-//         r#"
-// fn main() {
-//     var i = 0;
-//     let a = [];
-//     while i < 4 {
-//         defer i += 1;
-//         a.push(i);
-//     };
-//     a
-// }
-// "#,
+        //         r#"
+        // let a = [];
+        // fn main() {f(); a}
+        // fn f() {
+        //     defer a.push(6);
+        //     let x = 5;
+        //     defer a.push(x);
+        //     a.push(1);
+        //     let x = 3;
+        //     {
+        //         defer a.push(x);
+        //         a.push(2);
+        //     };
+        //     a.push(4);
+        // }
+        // "#,
+        //         r#"
+        // fn main() {
+        //     var i = 0;
+        //     let a = [];
+        //     while i < 4 {
+        //         defer i += 1;
+        //         a.push(i);
+        //     };
+        //     a
+        // }
+        // "#,
         r#"
 macro! foo {
     $body => {
@@ -338,7 +338,7 @@ fn main() {
     foo!(1 2 3)
 }
 "#,
-r#"
+        r#"
 fn main() {
     let a = [];
     var i = 0;
@@ -349,7 +349,20 @@ fn main() {
     };
     [a[0](), a[1]()]
 }
-"#
+"#,
+        r#"
+fn main() {
+  let a = [];
+  var i = 0;
+  for x in || { i += 1; i } {
+    if x > 10 {
+      break;
+    };
+    a.push(x);
+  };
+  a
+}
+"#,
     ];
     for (i, src) in srcs.iter().enumerate() {
         println!("test {}", i);

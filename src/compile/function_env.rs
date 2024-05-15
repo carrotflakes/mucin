@@ -145,6 +145,15 @@ impl FunctionEnv {
             ast::Expression::Labeled { label: _, body } => {
                 self.expression(body);
             }
+            ast::Expression::For {
+                variable,
+                iterable,
+                body,
+            } => {
+                self.expression(iterable);
+                self.envs.last_mut().unwrap().push((variable.clone(), false));
+                self.expression(body);
+            }
             ast::Expression::Block(block) => {
                 self.envs.push(vec![]);
                 self.block(block);

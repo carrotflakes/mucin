@@ -98,6 +98,11 @@ pub enum Expression {
         label: Str,
         body: Box<Expression>,
     },
+    For {
+        variable: Str,
+        iterable: Box<Expression>,
+        body: Box<Expression>,
+    },
     Match {
         expr: Box<Expression>,
         arms: Vec<(Pattern, Expression)>,

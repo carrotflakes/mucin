@@ -451,6 +451,7 @@ fn factor<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
         cond_if,
         loop_,
         while_,
+        for_,
         match_expr,
     ))(i)
 }
@@ -556,6 +557,25 @@ fn while_<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
                         })),
                     }),
                 }),
+            },
+        ))
+    })(i)
+}
+
+fn for_<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
+    let (i, _) = keyword("for")(i)?;
+
+    cut(move |i| {
+        let (i, variable) = identifier(i)?;
+        let (i, _) = keyword("in")(i)?;
+        let (i, iterable) = control(i)?;
+        let (i, body) = body(i)?;
+        Ok((
+            i,
+            Expression::For {
+                variable,
+                iterable: Box::new(iterable),
+                body: Box::new(body),
             },
         ))
     })(i)
