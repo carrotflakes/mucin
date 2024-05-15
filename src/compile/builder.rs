@@ -28,8 +28,6 @@ pub struct Builder<'gc> {
     labels: Vec<Label>,
     break_indexes: Vec<(Str, usize)>,
     instructions_offset: usize,
-    defered: Vec<(ast::Expression, usize)>,
-    env_truncate: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -37,7 +35,6 @@ struct Label {
     name: Str,
     continue_index: usize,
     stack_size: usize,
-    defered_len: usize,
 }
 
 impl<'gc> Builder<'gc> {
@@ -51,8 +48,6 @@ impl<'gc> Builder<'gc> {
             labels: vec![],
             break_indexes: vec![],
             instructions_offset: 0,
-            defered: vec![],
-            env_truncate: usize::MAX,
         }
     }
 
@@ -81,8 +76,6 @@ impl<'gc> Builder<'gc> {
             labels: self.labels.clone(),
             break_indexes: vec![],
             instructions_offset: self.instructions_offset + self.instructions.len(),
-            defered: self.defered.clone(),
-            env_truncate: self.env_truncate,
         }
     }
 
@@ -216,8 +209,6 @@ impl<'gc> Builder<'gc> {
             labels: vec![],
             break_indexes: vec![],
             instructions_offset: 0,
-            defered: vec![],
-            env_truncate: usize::MAX,
         };
 
         builder.envs.push(
@@ -240,8 +231,6 @@ impl<'gc> Builder<'gc> {
         if !builder.break_indexes.is_empty() {
             return Err("unexpected break in function definition".to_owned());
         }
-
-        builder.build_defer(0).unwrap();
 
         let frame = builder.envs.pop().unwrap();
         let frame = Gc::new(
@@ -504,7 +493,6 @@ impl<'gc> Builder<'gc> {
                     name: label.clone(),
                     continue_index,
                     stack_size: self.stack_size,
-                    defered_len: self.defered.len(),
                 });
                 let env_len = self.envs.last().unwrap().len();
 
@@ -540,7 +528,6 @@ impl<'gc> Builder<'gc> {
             }
             ast::Expression::Block(block) => {
                 let env_len = self.envs.last().unwrap().len();
-                let defered_len = self.defered.len();
 
                 let res = self.build_block(block);
                 match res {
@@ -548,8 +535,6 @@ impl<'gc> Builder<'gc> {
                     Err(Error::String(e)) => return Err(Error::String(e)),
                     Err(Error::Return) | Err(Error::Break) => {}
                 }
-
-                self.build_defer(defered_len)?;
 
                 self.envs.last_mut().unwrap()[env_len..].fill_with(|| (intern(""), false));
 
@@ -568,8 +553,6 @@ impl<'gc> Builder<'gc> {
                     self.instructions.push(Instruction::PushUnit);
                     self.stack_size += 1;
                 }
-
-                self.build_defer(0)?;
 
                 self.instructions.push(Instruction::Return);
                 return Err(Error::Return);
@@ -591,8 +574,6 @@ impl<'gc> Builder<'gc> {
                     self.instructions.push(Instruction::PushUnit);
                     self.stack_size += 1;
                 };
-
-                self.build_defer(label.defered_len)?;
 
                 self.break_indexes
                     .push((label.name, self.instructions.len()));
@@ -728,8 +709,9 @@ impl<'gc> Builder<'gc> {
                     self.stack_size -= 3;
                 }
                 ast::Statement::Defer { expr } => {
-                    self.defered
-                        .push((expr.clone(), self.envs.last().unwrap().len()));
+                    // self.defered
+                    //     .push((expr.clone(), self.envs.last().unwrap().len()));
+                    todo!()
                 }
             }
 
@@ -807,18 +789,6 @@ impl<'gc> Builder<'gc> {
         })
     }
 
-    #[must_use]
-    fn build_defer(&mut self, defered_len: usize) -> Result<()> {
-        while defered_len < self.defered.len() {
-            let (expr, env_len) = self.defered.pop().unwrap();
-            self.env_truncate = env_len;
-            self.build_expression(&expr)?;
-            self.instructions.push(Instruction::Pop);
-            self.stack_size -= 1;
-        }
-        Ok(())
-    }
-
     fn get_label(&mut self, label: &Str) -> Option<Label> {
         self.labels
             .iter()
@@ -837,7 +807,7 @@ impl<'gc> Builder<'gc> {
     fn resolve_variable(&self, name: &str) -> Option<(usize, usize, bool)> {
         self.envs.iter().enumerate().rev().find_map(|(i1, env)| {
             env.iter().enumerate().rev().find_map(|(i2, (n, mutable))| {
-                if (i1 < self.envs.len() - 1 || i2 < self.env_truncate) && n.as_str() == name {
+                if n.as_str() == name {
                     Some((i1, i2, *mutable))
                 } else {
                     None
