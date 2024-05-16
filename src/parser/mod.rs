@@ -56,7 +56,7 @@ pub fn parse(src: &str) -> Result<Vec<Definition>, String> {
 }
 
 fn print_error(source: &str, tokens: &[Token<&str>], token: &Token<&str>) -> String {
-    let mut ti = tokens.iter().position(|t| t == token).unwrap();
+    let mut ti = tokens.iter().position(|t| t as *const _ == token).unwrap();
     let mut pos = 0;
     while ti > 0 {
         match tokens[ti] {
@@ -208,7 +208,6 @@ fn body<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
 
 fn control<S: AsStr>(i: &[Token<S>]) -> IResult<&[Token<S>], Expression> {
     alt((
-        // map(macro_call, Expression::MacroCall),
         |i| {
             let (i, macro_call) = macro_call(i)?;
             let src = MACROS.with(|macros| {
