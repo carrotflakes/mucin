@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use gc_arena::Gc;
+
 use crate::{
     value::{Value, VmFn},
     vm::Vm,
@@ -8,6 +10,8 @@ use crate::{
 pub struct JumpPoint {
     pub frame_index: usize,
     pub value_index: usize,
+    function: *const (),
+    pc: usize,
 }
 
 fn vf_calljp<'gc>(vm: &mut Vm<'gc>) -> Result<(), String> {
@@ -15,6 +19,8 @@ fn vf_calljp<'gc>(vm: &mut Vm<'gc>) -> Result<(), String> {
     let jp = Arc::new(JumpPoint {
         frame_index: vm.frames.len(),
         value_index: vm.values.len(),
+        function: Gc::as_ptr(vm.frames.last().unwrap().function) as *const (),
+        pc: vm.frames.last().unwrap().pc,
     });
     vm.values.push(Value::Any(jp));
     vm.call(callee, 1)?;
@@ -26,6 +32,14 @@ fn vf_jump<'gc>(vm: &mut Vm<'gc>) -> Result<(), String> {
     let jp = vm.values.pop().unwrap();
     if let Some(any) = jp.as_any() {
         if let Some(jp) = any.downcast_ref::<JumpPoint>() {
+            let frame = vm
+                .frames
+                .get(jp.frame_index - 1)
+                .ok_or("JumpPoint is out of date")?;
+            if jp.function != Gc::as_ptr(frame.function) as *const () || jp.pc != frame.pc {
+                return Err("JumpPoint is out of date".to_string());
+            }
+
             vm.frames.truncate(jp.frame_index);
             vm.values.truncate(jp.value_index);
             vm.values.push(retval);

@@ -18,9 +18,9 @@ pub struct Vm<'gc> {
 
 #[derive(Clone)]
 pub struct Frame<'gc> {
-    function: Gc<'gc, Function<'gc>>,
-    pc: usize,
-    envs: Vec<Env<'gc>>,
+    pub function: Gc<'gc, Function<'gc>>,
+    pub pc: usize,
+    pub envs: Vec<Env<'gc>>,
 }
 
 impl<'gc> Vm<'gc> {
