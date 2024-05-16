@@ -33,10 +33,10 @@ fn add(x, y) {
 }
 ```
 
-コロンでブロックを省略することもできます。
+式のみで構成される場合はブロックを省略することもできます。
 
 ```rust
-fn add(x, y): x + y
+fn add(x, y) x + y
 ```
 
 ### 関数式 (クロージャ)
@@ -46,7 +46,7 @@ let add = fn(x, y) {
   x + y
 };
 
-let add = fn(x, y): x + y;
+let add = fn(x, y) x + y;
 
 let add = |x, y| x + y;
 ```
@@ -110,10 +110,10 @@ let x = if y == 10 {
 };
 ```
 
-`:` でカッコを省略することもできます。
+カッコを省略することもできます。
 
 ```rust
-let x = if y == 10: 20 else: 30;
+let x = if y == 10 20 else 30;
 ```
 
 ### loop 式
@@ -151,6 +151,8 @@ let x = match y {
 
 ### defer 文
 
+未実装。
+
 ブロックを抜けるときに必ず実行されるコードを書くことができます。
 
 ```rust
@@ -175,7 +177,7 @@ macro! s {
   $x => $x
 }
 
-fn main(): s!(print (list (+ 1 2) "hello"))
+fn main() s!(print (list (+ 1 2) "hello"))
 ```
 
 ### コメント
@@ -196,8 +198,8 @@ struct Point {
 }
 
 fn Point new(x, y) {
-    Point { x, y }
-  }
+  Point { x, y }
+}
 
 fn Point add(self, other) {
   Point { x: self.x + other.x, y: self.y + other.y }
