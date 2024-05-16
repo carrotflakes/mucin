@@ -248,6 +248,13 @@ fn Vec map(self, f) {
     };
     ret
 }
+fn Vec it(self) {
+    var i = 0;
+    || if i < self.len {
+        i += 1;
+        self[i - 1]
+    }
+}
 
 fn callMethod(args, obj, key) {
     var st = structType(obj);
