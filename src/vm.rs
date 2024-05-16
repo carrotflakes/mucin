@@ -27,8 +27,8 @@ impl<'gc> Vm<'gc> {
     pub fn new(mc: &'gc Mutation<'gc>) -> Self {
         Self {
             mc,
-            frames: vec![],
-            values: vec![],
+            frames: Vec::with_capacity(256),
+            values: Vec::with_capacity(1024),
             strict_arity: false,
         }
     }
