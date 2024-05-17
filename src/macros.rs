@@ -55,8 +55,8 @@ macro_rules! destruct_value_2 {
             $body
         }
     };
-    ($value:expr, (int_or_float $pat:tt), $body:block) => {
-        if let Some($pat) = $value.as_int_or_float() {
+    ($value:expr, (float* $pat:tt), $body:block) => {
+        if let Some($pat) = $value.as_float() {
             $body
         }
     };
