@@ -77,6 +77,11 @@ macro_rules! destruct_value_2 {
             $body
         }
     };
+    ($value:expr, (any_mut $pat:tt), $body:block) => {
+        if let $crate::value::Value::AnyMut($pat) = $value {
+            $body
+        }
+    };
     ($value:expr, (vec [$($pat:tt),* $(,)?]), $body:block) => {
         if let $crate::value::Value::Vec(ref vec) = $value {
             let vec = $crate::gc_arena::lock::RefLock::borrow(vec);
@@ -193,19 +198,6 @@ fn test_destruct_value() {
                 panic!("unexpected value");
             }
         }
-        // let value = Value::Dict(Gc::new(mc, RefLock::new(Dict(vec![
-        //     (Gc::new(mc, "a".to_string()), Value::Int(42)),
-        //     (Gc::new(mc, "b".to_string()), Value::Int(43)),
-        // ]))));
-        // destruct_value! {
-        //     &value,
-        //     (dict {c?: c}) => {
-        //         assert_eq!(c, &Value::Null);
-        //     },
-        //     _ => {
-        //         panic!("unexpected value");
-        //     }
-        // }
         let value = Value::String(crate::string::intern("hello"));
         destruct_value! {
             &value,
