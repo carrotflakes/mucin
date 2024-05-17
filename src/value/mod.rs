@@ -1,11 +1,14 @@
+pub mod dict;
+pub mod r#struct;
+
 use std::sync::{Arc, Mutex};
 
 use gc_arena::{lock::RefLock, Collect, Gc, Mutation};
 
-use crate::{
-    compile::{Function, NativeFn},
-    string::Str,
-};
+use crate::{compile::Function, string::Str};
+
+pub use dict::Dict;
+pub use r#struct::{Struct, StructType};
 
 type Error = String;
 
@@ -41,23 +44,10 @@ pub struct Closure<'gc> {
     pub capture: Box<[Gc<'gc, RefLock<Struct<'gc>>>]>,
 }
 
-#[derive(Collect, Debug, Clone, Default)]
-#[collect(no_drop)]
-pub struct Dict<'gc>(pub Vec<(Str, Value<'gc>)>);
-
-#[derive(Collect, Debug, Clone)]
-#[collect(no_drop)]
-pub struct StructType<'gc> {
-    pub name: Str,
-    pub fields: Box<[(Str, bool)]>,
-    pub methods: Gc<'gc, RefLock<Dict<'gc>>>,
-}
-
-#[derive(Collect, Debug, Clone)]
-#[collect(no_drop)]
-pub struct Struct<'gc> {
-    pub struct_type: Gc<'gc, StructType<'gc>>,
-    pub values: Box<[Value<'gc>]>,
+#[derive(Debug)]
+pub struct NativeFn {
+    pub arity: usize,
+    pub function: for<'gc> fn(&Mutation<'gc>, &[Value<'gc>]) -> Result<Value<'gc>, String>,
 }
 
 #[derive(Debug)]
@@ -304,14 +294,14 @@ impl<'gc> std::fmt::Debug for Value<'gc> {
             Value::String(value) => write!(f, "{:?}", value),
             Value::Pair(value) => write!(f, "{:?}", value),
             Value::Vec(vec) => write!(f, "{:?}", vec.borrow()),
-            Value::Dict(dict) => write!(f, "{:?}", dict.borrow()),
+            Value::Dict(dict) => write!(f, "{}", dict.borrow()),
             Value::StructType(struct_type) => write!(f, "{:?}", &struct_type.fields),
             Value::Struct(struct_) => write!(f, "{:?}", &struct_.as_ref().borrow().values),
-            Value::Any(_) => write!(f, "<any>"),
-            Value::AnyMut(_) => write!(f, "<any_mut>"),
-            Value::Closure(closure) => write!(f, "<closure {:?}>", closure),
-            Value::NativeFn(_) => write!(f, "<native_fn>"),
-            Value::VmFn(_) => write!(f, "<vm_fn>"),
+            Value::Any(_) => write!(f, "<Any>"),
+            Value::AnyMut(_) => write!(f, "<AnyMut>"),
+            Value::Closure(closure) => write!(f, "<Closure {:?}>", closure),
+            Value::NativeFn(_) => write!(f, "<NativeFn>"),
+            Value::VmFn(_) => write!(f, "<VmFn>"),
         }
     }
 }
@@ -352,130 +342,17 @@ impl<'gc> std::fmt::Display for Value<'gc> {
                 let struct_ = struct_.as_ref().borrow();
                 write!(f, "{}", struct_)
             }
-            Value::Any(_) => write!(f, "<any>"),
-            Value::AnyMut(_) => write!(f, "<any_mut>"),
+            Value::Any(_) => write!(f, "<Any>"),
+            Value::AnyMut(_) => write!(f, "<AnyMut>"),
             Value::Closure(c) => {
                 if c.function.name.is_empty() {
-                    write!(f, "<closure>")
+                    write!(f, "<Closure>")
                 } else {
-                    write!(f, "<closure {}>", &c.function.name)
+                    write!(f, "<Closure {}>", &c.function.name)
                 }
             }
-            Value::NativeFn(_) => write!(f, "<native_fn>"),
-            Value::VmFn(_) => write!(f, "<vm_fn>"),
+            Value::NativeFn(_) => write!(f, "<NativeFn>"),
+            Value::VmFn(_) => write!(f, "<VmFn>"),
         }
-    }
-}
-
-impl<'gc> Dict<'gc> {
-    pub fn get(&self, key: &Str) -> Option<&Value<'gc>> {
-        self.0
-            .iter()
-            .find_map(|(k, v)| if k == key { Some(v) } else { None })
-    }
-
-    pub fn get_by_str(&self, key: &str) -> Option<&Value<'gc>> {
-        self.0
-            .iter()
-            .find_map(|(k, v)| if k.as_str() == key { Some(v) } else { None })
-    }
-
-    pub fn set(&mut self, key: Str, value: Value<'gc>) {
-        if let Some(e) = self.0.iter_mut().find(|(k, _)| k == &key) {
-            e.1 = value;
-        } else {
-            self.0.push((key, value));
-        }
-    }
-
-    pub fn entries(&self) -> impl Iterator<Item = (&Str, &Value<'gc>)> {
-        self.0.iter().map(|(k, v)| (k, v))
-    }
-}
-
-impl<'gc> std::fmt::Display for Dict<'gc> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{{")?;
-        for (i, (key, value)) in self.0.iter().enumerate() {
-            if i > 0 {
-                write!(f, ", ")?;
-            }
-            write!(f, "{}: {}", key, value)?;
-        }
-        write!(f, "}}")
-    }
-}
-
-impl<'gc> Struct<'gc> {
-    pub fn from_type(
-        mc: &Mutation<'gc>,
-        struct_type: Gc<'gc, StructType<'gc>>,
-    ) -> Gc<'gc, RefLock<Self>> {
-        Gc::new(
-            mc,
-            RefLock::new(Struct {
-                struct_type,
-                values: struct_type.fields.iter().map(|_| Value::Unit).collect(),
-            }),
-        )
-    }
-
-    pub fn get(&self, key: &Str) -> Option<&Value<'gc>> {
-        self.values
-            .iter()
-            .zip(self.struct_type.fields.iter())
-            .find_map(|(value, field)| if &field.0 == key { Some(value) } else { None })
-    }
-
-    pub fn get_by_str(&self, key: &str) -> Option<&Value<'gc>> {
-        self.values
-            .iter()
-            .zip(self.struct_type.fields.iter())
-            .find_map(|(value, field)| {
-                if field.0.as_str() == key {
-                    Some(value)
-                } else {
-                    None
-                }
-            })
-    }
-
-    pub fn set(&mut self, key: Str, value: Value<'gc>) {
-        if let Some(i) = self
-            .struct_type
-            .fields
-            .iter()
-            .position(|field| field.0 == key)
-        {
-            self.values[i] = value;
-        }
-    }
-}
-
-impl std::fmt::Display for StructType<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name)?;
-        write!(f, "{{")?;
-        for (i, field) in self.fields.iter().enumerate() {
-            if i > 0 {
-                write!(f, ", ")?;
-            }
-            write!(f, "{}", field.0)?;
-        }
-        write!(f, "}}")
-    }
-}
-
-impl std::fmt::Display for Struct<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.struct_type.name)?;
-        write!(f, "{{")?;
-        for (i, value) in self.values.iter().enumerate() {
-            if i > 0 {
-                write!(f, ", ")?;
-            }
-            write!(f, "{}: {}", &self.struct_type.fields[i].0, value)?;
-        }
-        write!(f, "}}")
     }
 }

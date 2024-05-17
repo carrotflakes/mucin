@@ -1,9 +1,8 @@
 use gc_arena::{lock::RefLock, Gc, Mutation};
 
 use crate::{
-    compile::NativeFn,
     string::{intern, Str},
-    value::{Dict, Value},
+    value::{Dict, NativeFn, Value},
 };
 
 pub fn types<'gc>(mc: &Mutation<'gc>) -> Vec<(Str, Value<'gc>)> {

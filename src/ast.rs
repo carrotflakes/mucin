@@ -122,7 +122,7 @@ pub enum Expression {
     // Unused so far
     Env(Box<Expression>),
     StaticNativeFn {
-        native_fn: &'static crate::compile::NativeFn,
+        native_fn: &'static crate::value::NativeFn,
     },
 }
 

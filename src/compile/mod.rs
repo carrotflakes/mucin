@@ -5,11 +5,11 @@ mod pattern_match;
 use crate::{
     ast,
     string::Str,
-    value::{StructType, Value},
+    value::{NativeFn, StructType, Value},
 };
 
 pub use builder::Builder;
-use gc_arena::{Collect, Gc, Mutation};
+use gc_arena::{Collect, Gc};
 
 #[derive(Collect, Debug)]
 #[collect(no_drop)]
@@ -19,12 +19,6 @@ pub struct Function<'gc> {
     pub frame: Gc<'gc, StructType<'gc>>,
     pub body: Vec<Instruction<'gc>>,
     pub capture_envs: Vec<usize>,
-}
-
-#[derive(Debug)]
-pub struct NativeFn {
-    pub arity: usize,
-    pub function: for<'gc> fn(&Mutation<'gc>, &[Value<'gc>]) -> Result<Value<'gc>, String>,
 }
 
 #[derive(Collect)]
