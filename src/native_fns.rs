@@ -119,56 +119,11 @@ pub fn std<'gc>() -> Vec<(Str, Value<'gc>)> {
         ("vecPop", &NF_VEC_POP),
         ("vecInsert", &NF_VEC_INSERT),
         ("vecRemove", &NF_VEC_REMOVE),
-        // (
-        //     "import",
-        //     1,
-        //     |mc: &Mutation<'gc>, args: &[Value<'gc>]| -> Result<Value<'gc>, String> {
-        //         let Some((global_variable_names, env)) =
-        //             ENV_REF.with(|env_ref| env_ref.borrow().clone())
-        //         else {
-        //             return Err("import not initialized".to_string());
-        //         };
-
-        //         let path = match &args[0] {
-        //             Value::String(path) => path,
-        //             _ => return Err("expected string".to_string()),
-        //         };
-        //         let src = std::fs::read_to_string(path.as_str()).map_err(|e| e.to_string())?;
-
-        //         let defs = crate::parser::parse(&src)?;
-
-        //         let (names, env_initializers) = crate::compile::Builder::new(mc)
-        //             .wrap_env(global_variable_names)
-        //             .build_program(&defs)?;
-
-        //         let env = Vm::new_env(mc, vec![env.clone()], env_initializers)?;
-        //         let dict = Value::Dict(Gc::new(
-        //             mc,
-        //             RefLock::new(Dict(
-        //                 names
-        //                     .into_iter()
-        //                     .zip(env.borrow().iter().cloned())
-        //                     .collect(),
-        //             )),
-        //         ));
-        //         Ok(dict)
-        //     },
-        // ),
     ]
     .into_iter()
     .map(|(name, nf)| (intern(name), Value::NativeFn(nf)))
     .collect()
 }
-
-// thread_local! {
-//     pub static ENV_REF: std::cell::RefCell<Option<(Vec<Str>, Env<'static>)>> = std::cell::RefCell::new(None);
-// }
-
-// pub fn prepare_import(global_variable_names: Vec<Str>, env: Env) {
-//     ENV_REF.with(|env_ref| {
-//         *env_ref.borrow_mut() = Some((global_variable_names, env));
-//     });
-// }
 
 pub fn nf_typeof<'gc>(_mc: &Mutation<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, String> {
     Ok(match &args[0] {
