@@ -48,6 +48,46 @@ pub fn std<'gc>() -> Vec<(Str, Value<'gc>)> {
             },
         ),
         (
+            "int",
+            &NativeFn {
+                arity: 1,
+                function: |_mc: &Mutation<'_>, args: &[Value<'_>]| -> Result<Value<'_>, String> {
+                    Ok(match &args[0] {
+                        Value::Unit => Value::Int(0),
+                        Value::Null => Value::Int(0),
+                        Value::Bool(false) => Value::Int(0),
+                        Value::Bool(true) => Value::Int(1),
+                        Value::Int(v) => Value::Int(*v),
+                        Value::Float(v) => Value::Int(*v as i64),
+                        Value::String(s) => {
+                            Value::Int(s.parse::<i64>().map_err(|e| e.to_string())?)
+                        }
+                        _ => return Err("cast error".to_string()),
+                    })
+                },
+            },
+        ),
+        (
+            "float",
+            &NativeFn {
+                arity: 1,
+                function: |_mc: &Mutation<'_>, args: &[Value<'_>]| -> Result<Value<'_>, String> {
+                    Ok(match &args[0] {
+                        Value::Unit => Value::Float(0.0),
+                        Value::Null => Value::Float(0.0),
+                        Value::Bool(false) => Value::Float(0.0),
+                        Value::Bool(true) => Value::Float(1.0),
+                        Value::Int(v) => Value::Float(*v as f64),
+                        Value::Float(v) => Value::Float(*v),
+                        Value::String(s) => {
+                            Value::Float(s.parse::<f64>().map_err(|e| e.to_string())?)
+                        }
+                        _ => return Err("cast error".to_string()),
+                    })
+                },
+            },
+        ),
+        (
             "toString",
             &NativeFn {
                 arity: 1,

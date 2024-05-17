@@ -73,13 +73,6 @@ impl<'gc> Value<'gc> {
 
     pub fn as_float(&self) -> Option<f64> {
         match self {
-            Value::Float(value) => Some(*value),
-            _ => None,
-        }
-    }
-
-    pub fn as_int_or_float(&self) -> Option<f64> {
-        match self {
             Value::Int(value) => Some(*value as f64),
             Value::Float(value) => Some(*value),
             _ => None,
@@ -147,7 +140,9 @@ impl<'gc> Value<'gc> {
     pub fn add(&self, other: &Value<'gc>) -> Result<Value<'gc>, Error> {
         Ok(match (self, other) {
             (Value::Int(left), Value::Int(right)) => Value::Int(left + right),
+            (Value::Int(left), Value::Float(right)) => Value::Float(*left as f64 + right),
             (Value::Float(left), Value::Float(right)) => Value::Float(left + right),
+            (Value::Float(left), Value::Int(right)) => Value::Float(left + *right as f64),
             (Value::String(left), Value::String(right)) => {
                 Value::String(Str::from(format!("{}{}", left, right)))
             }
@@ -163,7 +158,9 @@ impl<'gc> Value<'gc> {
     pub fn sub(&self, other: &Value<'gc>) -> Result<Value<'gc>, Error> {
         Ok(match (self, other) {
             (Value::Int(left), Value::Int(right)) => Value::Int(left - right),
+            (Value::Int(left), Value::Float(right)) => Value::Float(*left as f64 - right),
             (Value::Float(left), Value::Float(right)) => Value::Float(left - right),
+            (Value::Float(left), Value::Int(right)) => Value::Float(left - *right as f64),
             _ => {
                 return Err(format!(
                     "unsupported types for sub, {:?} and {:?}",
@@ -176,7 +173,9 @@ impl<'gc> Value<'gc> {
     pub fn mul(&self, other: &Value<'gc>) -> Result<Value<'gc>, Error> {
         Ok(match (self, other) {
             (Value::Int(left), Value::Int(right)) => Value::Int(left * right),
+            (Value::Int(left), Value::Float(right)) => Value::Float(*left as f64 * right),
             (Value::Float(left), Value::Float(right)) => Value::Float(left * right),
+            (Value::Float(left), Value::Int(right)) => Value::Float(left * *right as f64),
             _ => {
                 return Err(format!(
                     "unsupported types for mul, {:?} and {:?}",
@@ -189,7 +188,9 @@ impl<'gc> Value<'gc> {
     pub fn div(&self, other: &Value<'gc>) -> Result<Value<'gc>, Error> {
         Ok(match (self, other) {
             (Value::Int(left), Value::Int(right)) => Value::Int(left / right),
+            (Value::Int(left), Value::Float(right)) => Value::Float(*left as f64 / right),
             (Value::Float(left), Value::Float(right)) => Value::Float(left / right),
+            (Value::Float(left), Value::Int(right)) => Value::Float(left / *right as f64),
             _ => {
                 return Err(format!(
                     "unsupported types for div, {:?} and {:?}",
@@ -202,7 +203,9 @@ impl<'gc> Value<'gc> {
     pub fn rem(&self, other: &Value<'gc>) -> Result<Value<'gc>, Error> {
         Ok(match (self, other) {
             (Value::Int(left), Value::Int(right)) => Value::Int(left % right),
+            (Value::Int(left), Value::Float(right)) => Value::Float(*left as f64 % right),
             (Value::Float(left), Value::Float(right)) => Value::Float(left % right),
+            (Value::Float(left), Value::Int(right)) => Value::Float(left % *right as f64),
             _ => {
                 return Err(format!(
                     "unsupported types for rem, {:?} and {:?}",
@@ -231,7 +234,9 @@ impl<'gc> Value<'gc> {
     pub fn gt(&self, other: &Value<'gc>) -> Result<Value<'gc>, Error> {
         Ok(match (self, other) {
             (Value::Int(left), Value::Int(right)) => Value::Bool(left > right),
+            (Value::Int(left), Value::Float(right)) => Value::Bool(*left as f64 > *right),
             (Value::Float(left), Value::Float(right)) => Value::Bool(left > right),
+            (Value::Float(left), Value::Int(right)) => Value::Bool(*left > *right as f64),
             _ => {
                 return Err(format!(
                     "unsupported types for gt, {:?} and {:?}",
@@ -244,7 +249,9 @@ impl<'gc> Value<'gc> {
     pub fn ge(&self, other: &Value<'gc>) -> Result<Value<'gc>, Error> {
         Ok(match (self, other) {
             (Value::Int(left), Value::Int(right)) => Value::Bool(left >= right),
+            (Value::Int(left), Value::Float(right)) => Value::Bool(*left as f64 >= *right),
             (Value::Float(left), Value::Float(right)) => Value::Bool(left >= right),
+            (Value::Float(left), Value::Int(right)) => Value::Bool(*left >= *right as f64),
             _ => {
                 return Err(format!(
                     "unsupported types for ge, {:?} and {:?}",
