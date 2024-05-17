@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use nom::{
     branch::alt,
     bytes::complete::{is_not, tag, take_until},
@@ -36,7 +34,7 @@ pub fn lex(mut i: &str) -> IResult<&str, Vec<Token<&str>>> {
             operator,
             map(keyword, Token::Keyword),
             map(identifier, Token::Identifier),
-            map(parse_string, |s| Token::String(Arc::new(s))),
+            map(parse_string, |s| Token::String(intern(&s))),
             map(terminated(digit1, not(char('.'))), |s: &str| {
                 Token::Int(s.parse().unwrap())
             }),
