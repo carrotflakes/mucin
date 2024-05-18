@@ -281,7 +281,7 @@ fn nf_field_assign<'gc>(mc: &Mutation<'gc>, values: &[Value<'gc>]) -> Result<Val
             Value::String(k) => {
                 let mut s = s.borrow_mut(mc);
                 let value = values[2].clone();
-                s.set(k.clone(), value);
+                s.set(k.clone(), value)?;
                 Ok(Value::Unit)
             }
             _ => Err(format!("expected string, got: {:?}", values[1])),

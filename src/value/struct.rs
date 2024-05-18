@@ -53,15 +53,20 @@ impl<'gc> Struct<'gc> {
             })
     }
 
-    pub fn set(&mut self, key: Str, value: Value<'gc>) {
+    pub fn set(&mut self, key: Str, value: Value<'gc>) -> Result<(), String> {
         if let Some(i) = self
             .struct_type
             .fields
             .iter()
             .position(|field| field.0 == key)
         {
+            if !self.struct_type.fields[i].1 {
+                return Err(format!("Cannot set immutable field {}", key));
+            }
+
             self.values[i] = value;
         }
+        Ok(())
     }
 }
 
