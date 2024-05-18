@@ -101,7 +101,7 @@ macro_rules! destruct_value_2 {
         if let $crate::value::Value::Dict(ref dict) = $value {
             let d = $crate::gc_arena::lock::RefLock::borrow(dict);
             $crate::destruct_value_1! {
-                [$((d.get_by_str(stringify!($k)), (Some($v))),)*],
+                [$((d.get_by_str(stringify!($k)).unwrap_or(&$crate::value::Value::Unit), $v),)*],
                 $body
             }
         }
