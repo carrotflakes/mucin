@@ -196,15 +196,15 @@ impl<'gc> RuntimeInner<'gc> {
     ) -> Result<Env<'gc>, String> {
         let defs = parser::parse(src)?;
 
-        let mut builder = compile::Builder::new(mc)
-            .wrap_envs(
-                self.envs
-                    .iter()
-                    .map(|env| env.borrow().struct_type.fields.to_vec())
-                    .collect(),
-            )
-            .use_method_call_fn(self.method_call_fn.clone());
-        let env_map = builder.build_program(&defs)?;
+        let mut builder = compile::Builder::new(
+            mc,
+            self.envs
+                .iter()
+                .map(|env| env.borrow().struct_type.fields.to_vec())
+                .collect(),
+            self.method_call_fn.clone(),
+        );
+        let (env_map, initializer) = builder.build_program(&defs)?;
         let struct_type = Gc::new(
             mc,
             StructType {
@@ -214,8 +214,7 @@ impl<'gc> RuntimeInner<'gc> {
             },
         );
 
-        let env =
-            Vm::new(mc).make_env(self.envs.clone(), struct_type, builder.into_instructions())?;
+        let env = Vm::new(mc).make_env(self.envs.clone(), struct_type, initializer)?;
 
         self.push(env);
 

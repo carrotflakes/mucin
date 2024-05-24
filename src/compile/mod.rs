@@ -1,4 +1,6 @@
+#[allow(unused)]
 mod builder;
+mod cfg;
 mod function_env;
 mod pattern_match;
 
@@ -8,8 +10,9 @@ use crate::{
     value::{NativeFn, StructType, Value},
 };
 
-pub use builder::Builder;
 use gc_arena::{Collect, Gc};
+
+pub use cfg::Builder;
 
 #[derive(Collect, Debug)]
 #[collect(no_drop)]
@@ -21,7 +24,7 @@ pub struct Function<'gc> {
     pub capture_envs: Vec<usize>,
 }
 
-#[derive(Collect)]
+#[derive(Collect, Clone)]
 #[collect(no_drop)]
 pub enum Instruction<'gc> {
     Push(Box<Value<'gc>>), // TODO: devide into PushInt...
@@ -102,7 +105,7 @@ impl<'gc> std::fmt::Debug for Instruction<'gc> {
             Instruction::JumpIf(index) => write!(f, "jump_if {}", index),
             Instruction::JumpIfNot(index) => write!(f, "jump_if_not {}", index),
 
-            Instruction::MakeClosure(c) => write!(f, "make_closure {:#?}", c),
+            Instruction::MakeClosure(c) => write!(f, "make_closure {:?}", &c.name),
             Instruction::MakeVec(size) => write!(f, "make_vec {}", size),
             Instruction::MakeVecWithUnpack(size) => write!(f, "make_vec_with_unpack {}", size),
             Instruction::MakePair => write!(f, "make_pair"),

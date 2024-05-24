@@ -70,16 +70,16 @@ impl<'gc> Repository<'gc> {
         let mut build_results: HashMap<Arc<String>, BuildResult> = HashMap::new();
 
         for file in self.files.iter().rev() {
-            let mut builder = crate::compile::Builder::new(self.mc)
-                .wrap_envs(
-                    outer_envs
-                        .iter()
-                        .map(|env| env.borrow().struct_type.fields.to_vec())
-                        .collect(),
-                )
-                .use_method_call_fn(method_call_fn.clone());
+            let mut builder = crate::compile::Builder::new(
+                self.mc,
+                outer_envs
+                    .iter()
+                    .map(|env| env.borrow().struct_type.fields.to_vec())
+                    .collect(),
+                method_call_fn.clone(),
+            );
 
-            let env_map = builder.build_program(&file.defines)?;
+            let (env_map, initializer) = builder.build_program(&file.defines)?;
             let struct_type = Gc::new(
                 self.mc,
                 StructType {
@@ -89,11 +89,7 @@ impl<'gc> Repository<'gc> {
                 },
             );
 
-            let env = Vm::new(self.mc).make_env(
-                outer_envs.to_vec(),
-                struct_type,
-                builder.into_instructions(),
-            )?;
+            let env = Vm::new(self.mc).make_env(outer_envs.to_vec(), struct_type, initializer)?;
 
             // Inject modules
             for (i, def) in file.defines.iter().enumerate() {

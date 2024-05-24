@@ -306,7 +306,7 @@ impl<'gc> std::fmt::Debug for Value<'gc> {
             Value::Struct(struct_) => write!(f, "{:?}", &struct_.as_ref().borrow().values),
             Value::Any(_) => write!(f, "<Any>"),
             Value::AnyMut(_) => write!(f, "<AnyMut>"),
-            Value::Closure(closure) => write!(f, "<Closure {:?}>", closure),
+            Value::Closure(closure) => write!(f, "<Closure {:?}>", &closure.function.name),
             Value::NativeFn(_) => write!(f, "<NativeFn>"),
             Value::VmFn(_) => write!(f, "<VmFn>"),
         }
